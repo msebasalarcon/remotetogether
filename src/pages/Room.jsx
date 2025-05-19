@@ -5,13 +5,13 @@ import { useParams } from "react-router-dom";
 export default function Room() {
     const { roomId } = useParams();
     const canvasRef = useRef(null);
+    const pipCanvasRef = useRef(null);
     const localVideoRef = useRef(null);
     const remoteVideoRef = useRef(null);
-    const pipCanvasRef = useRef(null); // Small Picture-in-Picture canvas
+
     const [peerId, setPeerId] = useState(null);
     const [isRoomCreator, setIsRoomCreator] = useState(false);
 
-    // Store B's segmented frame
     const bFrame = useRef({ image: null, mask: null });
 
     useEffect(() => {
@@ -20,12 +20,13 @@ export default function Room() {
             const ctx = canvas.getContext("2d");
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // Draw A's full background (local video)
-            if (localVideoRef.current && localVideoRef.current.readyState >= 2) {
-                ctx.drawImage(localVideoRef.current, 0, 0, canvas.width, canvas.height);
+            // Always draw Person A (room creator) as background
+            const backgroundVideo = isRoomCreator ? localVideoRef.current : remoteVideoRef.current;
+            if (backgroundVideo && backgroundVideo.readyState >= 2) {
+                ctx.drawImage(backgroundVideo, 0, 0, canvas.width, canvas.height);
             }
 
-            // Draw B segmented on top if available
+            // Draw Person B segmented on top
             if (bFrame.current.image && bFrame.current.mask) {
                 ctx.save();
                 ctx.drawImage(bFrame.current.mask, 0, 0, canvas.width, canvas.height);
@@ -42,7 +43,6 @@ export default function Room() {
             const pipCtx = pipCanvas.getContext("2d");
             pipCtx.clearRect(0, 0, pipCanvas.width, pipCanvas.height);
 
-            // Draw B's segmented image in the PiP canvas
             pipCtx.save();
             pipCtx.drawImage(bFrame.current.mask, 0, 0, pipCanvas.width, pipCanvas.height);
             pipCtx.globalCompositeOperation = "source-in";
@@ -56,7 +56,7 @@ export default function Room() {
             requestAnimationFrame(drawLoop);
         };
 
-        const loadSelfieSegmentation = async (video) => {
+        const loadSegmentation = async (video) => {
             const { SelfieSegmentation } = await import("@mediapipe/selfie_segmentation");
             const { Camera } = await import("@mediapipe/camera_utils");
 
@@ -93,36 +93,39 @@ export default function Room() {
             localVideoRef.current.srcObject = localStream;
             localVideoRef.current.play();
 
-            const newPeer = new Peer();
+            const peer = new Peer();
 
-            newPeer.on("open", (id) => {
+            peer.on("open", (id) => {
                 setPeerId(id);
 
                 if (!roomId) {
-                    setIsRoomCreator(true); // Person A
+                    // Person A
+                    setIsRoomCreator(true);
                 } else {
-                    // Person B joins Person A
-                    const call = newPeer.call(roomId, localStream);
-
+                    // Person B joins
+                    const call = peer.call(roomId, localStream);
                     call.on("stream", (remoteStream) => {
                         remoteVideoRef.current.srcObject = remoteStream;
                         remoteVideoRef.current.play();
-                        loadSelfieSegmentation(remoteVideoRef.current); // Remove B's background
+
+                        // For Person B, run segmentation on their *local* camera
+                        loadSegmentation(localVideoRef.current);
                     });
                 }
             });
 
-            newPeer.on("call", (call) => {
+            peer.on("call", (call) => {
                 call.answer(localStream); // A answers B
-
                 call.on("stream", (remoteStream) => {
                     remoteVideoRef.current.srcObject = remoteStream;
                     remoteVideoRef.current.play();
-                    loadSelfieSegmentation(remoteVideoRef.current); // Remove B's background
+
+                    // For Person A, run segmentation on remote stream (from B)
+                    loadSegmentation(remoteVideoRef.current);
                 });
             });
 
-            drawLoop(); // Start drawing loop
+            drawLoop();
         };
 
         initPeer();
@@ -146,15 +149,12 @@ export default function Room() {
             )}
 
             <div className="relative">
-                {/* Main video canvas */}
                 <canvas
                     ref={canvasRef}
                     width={640}
                     height={480}
                     className="rounded-lg border border-gray-400"
                 />
-
-                {/* PiP canvas for Person B with removed background - positioned in top-right corner */}
                 <canvas
                     ref={pipCanvasRef}
                     width={160}
