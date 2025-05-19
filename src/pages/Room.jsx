@@ -13,11 +13,12 @@ export default function Room() {
     const bFrame = useRef({ image: null, mask: null });
 
     useEffect(() => {
-        const drawMainCanvas = () => {
+        const drawCanvas = () => {
             const canvas = canvasRef.current;
             const ctx = canvas.getContext("2d");
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+            // Always use Person A's video as background
             const backgroundVideo = isRoomCreator
                 ? localVideoRef.current
                 : remoteVideoRef.current;
@@ -25,17 +26,9 @@ export default function Room() {
             if (backgroundVideo && backgroundVideo.readyState >= 2) {
                 ctx.drawImage(backgroundVideo, 0, 0, canvas.width, canvas.height);
             }
-
-            if (bFrame.current.image && bFrame.current.mask) {
-                ctx.save();
-                ctx.drawImage(bFrame.current.mask, 0, 0, canvas.width, canvas.height);
-                ctx.globalCompositeOperation = "source-in";
-                ctx.drawImage(bFrame.current.image, 0, 0, canvas.width, canvas.height);
-                ctx.restore();
-            }
         };
 
-        const drawPipCanvas = () => {
+        const drawOverlay = () => {
             const pipCanvas = pipCanvasRef.current;
             if (!pipCanvas || !bFrame.current.image || !bFrame.current.mask) return;
 
@@ -62,8 +55,8 @@ export default function Room() {
         };
 
         const drawLoop = () => {
-            drawMainCanvas();
-            drawPipCanvas();
+            drawCanvas();
+            drawOverlay();
             requestAnimationFrame(drawLoop);
         };
 
@@ -117,7 +110,6 @@ export default function Room() {
                     call.on("stream", (remoteStream) => {
                         remoteVideoRef.current.srcObject = remoteStream;
                         remoteVideoRef.current.play();
-                        // Person B should segment their own video
                         loadSegmentation(localVideoRef.current);
                     });
                 }
@@ -128,7 +120,6 @@ export default function Room() {
                 call.on("stream", (remoteStream) => {
                     remoteVideoRef.current.srcObject = remoteStream;
                     remoteVideoRef.current.play();
-                    // Person A segments incoming video from B
                     loadSegmentation(remoteVideoRef.current);
                 });
             });
@@ -160,13 +151,13 @@ export default function Room() {
                     ref={canvasRef}
                     width={640}
                     height={480}
-                    className="absolute top-0 left-0 w-full h-full rounded-lg border border-gray-400"
+                    className="absolute top-0 left-0 w-full h-full rounded-lg border border-gray-400 z-0"
                 />
                 <canvas
                     ref={pipCanvasRef}
-                    width={160}
-                    height={120}
-                    className="absolute top-4 right-4 w-[160px] h-[120px] rounded-md border border-gray-400 shadow-md"
+                    width={640}
+                    height={480}
+                    className="absolute top-0 left-0 w-full h-full rounded-lg border border-gray-400 z-10 pointer-events-none"
                 />
             </div>
 
