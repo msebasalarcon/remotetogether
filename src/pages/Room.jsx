@@ -13,6 +13,10 @@ export default function Room() {
     const [isRoomCreator, setIsRoomCreator] = useState(false);
     const [connected, setConnected] = useState(false);
 
+    // Store references to identify which video belongs to which person
+    const personAVideoRef = useRef(null);
+    const personBVideoRef = useRef(null);
+
     // Store frame data for person B's segmentation
     const bFrame = useRef({ image: null, mask: null });
 
@@ -23,10 +27,9 @@ export default function Room() {
             const ctxA = personACanvas.getContext("2d");
             ctxA.clearRect(0, 0, personACanvas.width, personACanvas.height);
 
-            // Determine which video is Person A's
-            const personAVideo = isRoomCreator ? localVideoRef.current : remoteVideoRef.current;
-            if (personAVideo && personAVideo.readyState >= 2) {
-                ctxA.drawImage(personAVideo, 0, 0, personACanvas.width, personACanvas.height);
+            // Draw from Person A's video (consistent regardless of which room)
+            if (personAVideoRef.current && personAVideoRef.current.readyState >= 2) {
+                ctxA.drawImage(personAVideoRef.current, 0, 0, personACanvas.width, personACanvas.height);
             }
 
             // Draw Person B's segmented video on bottom canvas
@@ -93,6 +96,10 @@ export default function Room() {
                 if (!roomId) {
                     // Person A (room creator)
                     setIsRoomCreator(true);
+
+                    // Person A: local video is A, remote will be B
+                    personAVideoRef.current = localVideoRef.current;
+                    personBVideoRef.current = remoteVideoRef.current;
                 } else {
                     // Person B joins
                     const call = peer.call(roomId, localStream);
@@ -101,9 +108,12 @@ export default function Room() {
                         remoteVideoRef.current.play();
                         setConnected(true);
 
-                        // For Person B, apply segmentation to their own local stream (B)
-                        // since B's video needs to appear segmented to both parties
-                        loadSegmentation(localVideoRef.current);
+                        // Person B: remote video is A, local is B
+                        personAVideoRef.current = remoteVideoRef.current;
+                        personBVideoRef.current = localVideoRef.current;
+
+                        // Apply segmentation to Person B's video (local for Person B)
+                        loadSegmentation(personBVideoRef.current);
                     });
                 }
             });
@@ -115,9 +125,12 @@ export default function Room() {
                     remoteVideoRef.current.play();
                     setConnected(true);
 
-                    // For Person A, apply segmentation to B's incoming stream
-                    // since B's video needs to appear segmented to both parties
-                    loadSegmentation(remoteVideoRef.current);
+                    // Person A: local video is A, remote is B
+                    personAVideoRef.current = localVideoRef.current;
+                    personBVideoRef.current = remoteVideoRef.current;
+
+                    // Apply segmentation to Person B's video (remote for Person A)
+                    loadSegmentation(personBVideoRef.current);
                 });
             });
 
@@ -154,6 +167,7 @@ export default function Room() {
                         height={480}
                         className="rounded-lg border border-gray-400"
                     />
+                    {!connected && !isRoomCreator && <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white rounded-lg">Waiting for connection...</div>}
                 </div>
 
                 {/* Person B's segmented video */}
@@ -165,7 +179,7 @@ export default function Room() {
                         height={480}
                         className="rounded-lg border border-gray-400"
                     />
-                    {!connected && <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white rounded-lg">Waiting for connection...</div>}
+                    {!connected && isRoomCreator && <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white rounded-lg">Waiting for connection...</div>}
                 </div>
             </div>
 
