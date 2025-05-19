@@ -4,71 +4,56 @@ import { useParams } from "react-router-dom";
 
 export default function Room() {
     const { roomId } = useParams();
-    const canvasRef = useRef(null);
-    const pipCanvasRef = useRef(null);
+    const personACanvasRef = useRef(null);
+    const personBCanvasRef = useRef(null);
     const localVideoRef = useRef(null);
     const remoteVideoRef = useRef(null);
+
     const [peerId, setPeerId] = useState(null);
     const [isRoomCreator, setIsRoomCreator] = useState(false);
+    const [connected, setConnected] = useState(false);
+
+    // Store frame data for person B's segmentation
     const bFrame = useRef({ image: null, mask: null });
 
     useEffect(() => {
-        const drawCanvas = () => {
-            const canvas = canvasRef.current;
-            const ctx = canvas.getContext("2d");
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const drawCanvases = () => {
+            // Draw Person A's normal video on top canvas
+            const personACanvas = personACanvasRef.current;
+            const ctxA = personACanvas.getContext("2d");
+            ctxA.clearRect(0, 0, personACanvas.width, personACanvas.height);
 
-            // Always use Person A's video as background
-            const backgroundVideo = isRoomCreator
-                ? localVideoRef.current
-                : remoteVideoRef.current;
+            // Determine which video is Person A's
+            const personAVideo = isRoomCreator ? localVideoRef.current : remoteVideoRef.current;
+            if (personAVideo && personAVideo.readyState >= 2) {
+                ctxA.drawImage(personAVideo, 0, 0, personACanvas.width, personACanvas.height);
+            }
 
-            if (backgroundVideo && backgroundVideo.readyState >= 2) {
-                ctx.drawImage(backgroundVideo, 0, 0, canvas.width, canvas.height);
+            // Draw Person B's segmented video on bottom canvas
+            const personBCanvas = personBCanvasRef.current;
+            const ctxB = personBCanvas.getContext("2d");
+            ctxB.clearRect(0, 0, personBCanvas.width, personBCanvas.height);
+
+            if (bFrame.current.image && bFrame.current.mask) {
+                ctxB.save();
+                ctxB.drawImage(bFrame.current.mask, 0, 0, personBCanvas.width, personBCanvas.height);
+                ctxB.globalCompositeOperation = "source-in";
+                ctxB.drawImage(bFrame.current.image, 0, 0, personBCanvas.width, personBCanvas.height);
+                ctxB.restore();
             }
         };
 
-        const drawOverlay = () => {
-            const pipCanvas = pipCanvasRef.current;
-            if (!pipCanvas || !bFrame.current.image || !bFrame.current.mask) return;
-
-            const pipCtx = pipCanvas.getContext("2d");
-            pipCtx.clearRect(0, 0, pipCanvas.width, pipCanvas.height);
-
-            pipCtx.save();
-            pipCtx.drawImage(
-                bFrame.current.mask,
-                0,
-                0,
-                pipCanvas.width,
-                pipCanvas.height
-            );
-            pipCtx.globalCompositeOperation = "source-in";
-            pipCtx.drawImage(
-                bFrame.current.image,
-                0,
-                0,
-                pipCanvas.width,
-                pipCanvas.height
-            );
-            pipCtx.restore();
-        };
-
         const drawLoop = () => {
-            drawCanvas();
-            drawOverlay();
+            drawCanvases();
             requestAnimationFrame(drawLoop);
         };
 
         const loadSegmentation = async (video) => {
-            const { SelfieSegmentation } = await import(
-                "@mediapipe/selfie_segmentation"
-            );
+            const { SelfieSegmentation } = await import("@mediapipe/selfie_segmentation");
             const { Camera } = await import("@mediapipe/camera_utils");
 
             const selfieSegmentation = new SelfieSegmentation({
-                locateFile: (file) =>
-                    `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
             });
 
             selfieSegmentation.setOptions({ modelSelection: 1 });
@@ -87,6 +72,7 @@ export default function Room() {
                 width: 640,
                 height: 480,
             });
+
             camera.start();
         };
 
@@ -95,6 +81,7 @@ export default function Room() {
                 video: true,
                 audio: false,
             });
+
             localVideoRef.current.srcObject = localStream;
             localVideoRef.current.play();
 
@@ -104,22 +91,32 @@ export default function Room() {
                 setPeerId(id);
 
                 if (!roomId) {
+                    // Person A (room creator)
                     setIsRoomCreator(true);
                 } else {
+                    // Person B joins
                     const call = peer.call(roomId, localStream);
                     call.on("stream", (remoteStream) => {
                         remoteVideoRef.current.srcObject = remoteStream;
                         remoteVideoRef.current.play();
+                        setConnected(true);
+
+                        // For Person B, apply segmentation to their own local stream (B)
+                        // since B's video needs to appear segmented to both parties
                         loadSegmentation(localVideoRef.current);
                     });
                 }
             });
 
             peer.on("call", (call) => {
-                call.answer(localStream);
+                call.answer(localStream); // A answers B
                 call.on("stream", (remoteStream) => {
                     remoteVideoRef.current.srcObject = remoteStream;
                     remoteVideoRef.current.play();
+                    setConnected(true);
+
+                    // For Person A, apply segmentation to B's incoming stream
+                    // since B's video needs to appear segmented to both parties
                     loadSegmentation(remoteVideoRef.current);
                 });
             });
@@ -135,30 +132,41 @@ export default function Room() {
             <h2 className="text-xl font-bold mb-4">
                 {isRoomCreator ? "🅰️ You are Person A (Host)" : "🅱️ You are Person B (Joiner)"}
             </h2>
+
             <h3 className="mb-2">Your Peer ID: {peerId}</h3>
+
             {isRoomCreator && peerId && (
                 <p className="mb-4">
-                    Share this link with your friend to join:
-                    <br />
+                    Share this link with your friend to join: <br />
                     <code className="text-blue-600">
                         {`${window.location.origin}/room/${peerId}`}
                     </code>
                 </p>
             )}
 
-            <div className="relative w-[640px] h-[480px]">
-                <canvas
-                    ref={canvasRef}
-                    width={640}
-                    height={480}
-                    className="absolute top-0 left-0 w-full h-full rounded-lg border border-gray-400 z-0"
-                />
-                <canvas
-                    ref={pipCanvasRef}
-                    width={640}
-                    height={480}
-                    className="absolute top-0 left-0 w-full h-full rounded-lg border border-gray-400 z-10 pointer-events-none"
-                />
+            <div className="flex flex-col items-center gap-4">
+                {/* Person A's full video */}
+                <div className="relative">
+                    <h3 className="text-lg font-semibold mb-2">Person A (with background)</h3>
+                    <canvas
+                        ref={personACanvasRef}
+                        width={640}
+                        height={480}
+                        className="rounded-lg border border-gray-400"
+                    />
+                </div>
+
+                {/* Person B's segmented video */}
+                <div className="relative">
+                    <h3 className="text-lg font-semibold mb-2">Person B (background removed)</h3>
+                    <canvas
+                        ref={personBCanvasRef}
+                        width={640}
+                        height={480}
+                        className="rounded-lg border border-gray-400"
+                    />
+                    {!connected && <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white rounded-lg">Waiting for connection...</div>}
+                </div>
             </div>
 
             {/* Hidden video elements */}
