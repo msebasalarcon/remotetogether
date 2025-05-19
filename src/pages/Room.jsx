@@ -117,7 +117,8 @@ export default function Room() {
                     call.on("stream", (remoteStream) => {
                         remoteVideoRef.current.srcObject = remoteStream;
                         remoteVideoRef.current.play();
-                        loadSegmentation(localVideoRef.current); // Person B: Segment own video
+                        // Person B should segment their own video
+                        loadSegmentation(localVideoRef.current);
                     });
                 }
             });
@@ -127,7 +128,8 @@ export default function Room() {
                 call.on("stream", (remoteStream) => {
                     remoteVideoRef.current.srcObject = remoteStream;
                     remoteVideoRef.current.play();
-                    loadSegmentation(remoteVideoRef.current); // Person A: Segment B's stream
+                    // Person A segments incoming video from B
+                    loadSegmentation(remoteVideoRef.current);
                 });
             });
 
