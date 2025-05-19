@@ -20,13 +20,11 @@ export default function Room() {
             const ctx = canvas.getContext("2d");
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // Always draw Person A (room creator) as background
             const backgroundVideo = isRoomCreator ? localVideoRef.current : remoteVideoRef.current;
             if (backgroundVideo && backgroundVideo.readyState >= 2) {
                 ctx.drawImage(backgroundVideo, 0, 0, canvas.width, canvas.height);
             }
 
-            // Draw Person B segmented on top
             if (bFrame.current.image && bFrame.current.mask) {
                 ctx.save();
                 ctx.drawImage(bFrame.current.mask, 0, 0, canvas.width, canvas.height);
@@ -99,29 +97,32 @@ export default function Room() {
                 setPeerId(id);
 
                 if (!roomId) {
-                    // Person A
+                    // Person A (host)
                     setIsRoomCreator(true);
                 } else {
-                    // Person B joins
+                    // Person B (joiner)
                     const call = peer.call(roomId, localStream);
                     call.on("stream", (remoteStream) => {
                         remoteVideoRef.current.srcObject = remoteStream;
                         remoteVideoRef.current.play();
 
-                        // For Person B, run segmentation on their *local* camera
-                        loadSegmentation(localVideoRef.current);
+                        // ❌ DO NOT segment on Person B
+                        // ✅ Person B just displays what Person A segments
                     });
                 }
             });
 
             peer.on("call", (call) => {
-                call.answer(localStream); // A answers B
+                call.answer(localStream); // Person A answers
+
                 call.on("stream", (remoteStream) => {
                     remoteVideoRef.current.srcObject = remoteStream;
                     remoteVideoRef.current.play();
 
-                    // For Person A, run segmentation on remote stream (from B)
-                    loadSegmentation(remoteVideoRef.current);
+                    if (isRoomCreator) {
+                        // ✅ Only Person A performs segmentation on Person B
+                        loadSegmentation(remoteVideoRef.current);
+                    }
                 });
             });
 
