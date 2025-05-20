@@ -14,15 +14,15 @@ export default function Room() {
     const [connected, setConnected] = useState(false);
 
     // Store references to identify which video belongs to which person
-    const personAVideoRef = useRef(null); // Person A's video (unsegmented)
-    const personBVideoRef = useRef(null); // Person B's video (segmented)
+    const personAVideoRef = useRef(null);
+    const personBVideoRef = useRef(null);
 
     // Store frame data for Person B's segmentation
     const bFrame = useRef({ image: null, mask: null });
 
     useEffect(() => {
         const drawCanvases = () => {
-            // Draw Person A's normal video on top canvas (same for both A and B)
+            // Draw Person A's video on the top canvas
             const personACanvas = personACanvasRef.current;
             const ctxA = personACanvas.getContext("2d");
             ctxA.clearRect(0, 0, personACanvas.width, personACanvas.height);
@@ -31,7 +31,7 @@ export default function Room() {
                 ctxA.drawImage(personAVideoRef.current, 0, 0, personACanvas.width, personACanvas.height);
             }
 
-            // Draw Person B's segmented video on bottom canvas (same for both A and B)
+            // Draw Person B's segmented video on the bottom canvas
             const personBCanvas = personBCanvasRef.current;
             const ctxB = personBCanvas.getContext("2d");
             ctxB.clearRect(0, 0, personBCanvas.width, personBCanvas.height);
@@ -55,7 +55,8 @@ export default function Room() {
             const { Camera } = await import("@mediapipe/camera_utils");
 
             const selfieSegmentation = new SelfieSegmentation({
-                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
+                locateFile: (file) =>
+                    `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
             });
 
             selfieSegmentation.setOptions({ modelSelection: 1 });
@@ -95,34 +96,44 @@ export default function Room() {
                 if (!roomId) {
                     // Person A (room creator)
                     setIsRoomCreator(true);
-                    // Person A: local video is A (unsegmented), remote will be B (segmented)
                     personAVideoRef.current = localVideoRef.current;
                     personBVideoRef.current = remoteVideoRef.current;
                 } else {
-                    // Person B joins
+                    // Person B (joiner)
                     const call = peer.call(roomId, localStream);
                     call.on("stream", (remoteStream) => {
                         remoteVideoRef.current.srcObject = remoteStream;
                         remoteVideoRef.current.play();
-                        setConnected(true);
-                        // Person B: remote video is A (unsegmented), local is B (segmented)
-                        personAVideoRef.current = remoteVideoRef.current;
-                        personBVideoRef.current = localVideoRef.current;
-                        loadSegmentation(personBVideoRef.current); // Segment Person B's video
+
+                        // Ensure the remote video is ready before applying segmentation
+                        remoteVideoRef.current.onloadeddata = () => {
+                            setConnected(true);
+                            // For Person B: remote video represents Person A and local video represents Person B
+                            personAVideoRef.current = remoteVideoRef.current;
+                            personBVideoRef.current = localVideoRef.current;
+                            // Apply segmentation to Person B's video (local stream for joiner)
+                            loadSegmentation(personBVideoRef.current);
+                        };
                     });
                 }
             });
 
             peer.on("call", (call) => {
-                call.answer(localStream); // Person A answers Person B
+                // When called (for Person A), answer with your local stream
+                call.answer(localStream);
                 call.on("stream", (remoteStream) => {
                     remoteVideoRef.current.srcObject = remoteStream;
                     remoteVideoRef.current.play();
-                    setConnected(true);
-                    // Person A: local video is A (unsegmented), remote is B (segmented)
-                    personAVideoRef.current = localVideoRef.current;
-                    personBVideoRef.current = remoteVideoRef.current;
-                    loadSegmentation(personBVideoRef.current); // Segment Person B's video
+
+                    // Wait until remote video has enough data for segmentation
+                    remoteVideoRef.current.onloadeddata = () => {
+                        setConnected(true);
+                        // For Person A: local video is Person A and remote video is Person B
+                        personAVideoRef.current = localVideoRef.current;
+                        personBVideoRef.current = remoteVideoRef.current;
+                        // Apply segmentation to Person B's remote stream
+                        loadSegmentation(personBVideoRef.current);
+                    };
                 });
             });
 
@@ -150,7 +161,7 @@ export default function Room() {
             )}
 
             <div className="flex flex-col items-center gap-4">
-                {/* Person A's full video (same in both rooms) */}
+                {/* Person A's full video canvas */}
                 <div className="relative">
                     <h3 className="text-lg font-semibold mb-2">Person A (with background)</h3>
                     <canvas
@@ -166,7 +177,7 @@ export default function Room() {
                     )}
                 </div>
 
-                {/* Person B's segmented video (same in both rooms) */}
+                {/* Person B's segmented video canvas */}
                 <div className="relative">
                     <h3 className="text-lg font-semibold mb-2">Person B (background removed)</h3>
                     <canvas
