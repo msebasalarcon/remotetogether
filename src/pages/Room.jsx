@@ -15,53 +15,32 @@ export default function Room() {
 
     // Store frame data for segmentation
     const localFrame = useRef({ image: null, mask: null });
-    // NEW: Store remote frame data for Person B's segmented video
     const remoteFrame = useRef({ image: null, mask: null });
 
     useEffect(() => {
-        // Determine role immediately (only once)
-        setIsRoomCreator(!roomId);
-
-        // Draw loop
         const drawCanvases = () => {
-            const canvasA = personACanvasRef.current;
-            const ctxA = canvasA.getContext("2d");
-            ctxA.clearRect(0, 0, canvasA.width, canvasA.height);
+            // Draw Person A's normal video on top canvas
+            const personACanvas = personACanvasRef.current;
+            const ctxA = personACanvas.getContext("2d");
+            ctxA.clearRect(0, 0, personACanvas.width, personACanvas.height);
 
-            const canvasB = personBCanvasRef.current;
-            const ctxB = canvasB.getContext("2d");
-            ctxB.clearRect(0, 0, canvasB.width, canvasB.height);
+            // Always show remote stream as Person A (with background)
+            if (remoteVideoRef.current && remoteVideoRef.current.readyState >= 2) {
+                ctxA.drawImage(remoteVideoRef.current, 0, 0, personACanvas.width, personACanvas.height);
+            }
 
-            if (isRoomCreator) {
-                // — Person A view —
-                // Top: local raw video (Person A with background)
-                if (localVideoRef.current.readyState >= 2) {
-                    ctxA.drawImage(localVideoRef.current, 0, 0, canvasA.width, canvasA.height);
-                }
+            // Draw Person B's segmented video on bottom canvas
+            const personBCanvas = personBCanvasRef.current;
+            const ctxB = personBCanvas.getContext("2d");
+            ctxB.clearRect(0, 0, personBCanvas.width, personBCanvas.height);
 
-                // Bottom: Person B's segmented video
-                if (connected && remoteFrame.current.image && remoteFrame.current.mask) {
-                    ctxB.save();
-                    ctxB.drawImage(remoteFrame.current.mask, 0, 0, canvasB.width, canvasB.height);
-                    ctxB.globalCompositeOperation = "source-in";
-                    ctxB.drawImage(remoteFrame.current.image, 0, 0, canvasB.width, canvasB.height);
-                    ctxB.restore();
-                }
-            } else {
-                // — Person B view —
-                // Top: remote raw video (Person A with background)
-                if (connected && remoteVideoRef.current.readyState >= 2) {
-                    ctxA.drawImage(remoteVideoRef.current, 0, 0, canvasA.width, canvasA.height);
-                }
-
-                // Bottom: local segmented video (Person B without background)
-                if (localFrame.current.image && localFrame.current.mask) {
-                    ctxB.save();
-                    ctxB.drawImage(localFrame.current.mask, 0, 0, canvasB.width, canvasB.height);
-                    ctxB.globalCompositeOperation = "source-in";
-                    ctxB.drawImage(localFrame.current.image, 0, 0, canvasB.width, canvasB.height);
-                    ctxB.restore();
-                }
+            // Always show local stream as Person B (with background removed)
+            if (localFrame.current.image && localFrame.current.mask) {
+                ctxB.save();
+                ctxB.drawImage(localFrame.current.mask, 0, 0, personBCanvas.width, personBCanvas.height);
+                ctxB.globalCompositeOperation = "source-in";
+                ctxB.drawImage(localFrame.current.image, 0, 0, personBCanvas.width, personBCanvas.height);
+                ctxB.restore();
             }
         };
 
@@ -70,45 +49,56 @@ export default function Room() {
             requestAnimationFrame(drawLoop);
         };
 
-        // Load background segmentation on a video element
-        const loadSegmentation = async (video, frameRef) => {
+        const loadSegmentation = async (video) => {
             const { SelfieSegmentation } = await import("@mediapipe/selfie_segmentation");
             const { Camera } = await import("@mediapipe/camera_utils");
-            const segmenter = new SelfieSegmentation({
-                locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${f}`,
+
+            const selfieSegmentation = new SelfieSegmentation({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
             });
-            segmenter.setOptions({ modelSelection: 1 });
-            segmenter.onResults((results) => {
-                frameRef.current = {
+
+            selfieSegmentation.setOptions({ modelSelection: 1 });
+
+            selfieSegmentation.onResults((results) => {
+                localFrame.current = {
                     image: results.image,
                     mask: results.segmentationMask,
                 };
             });
+
             const camera = new Camera(video, {
-                onFrame: () => segmenter.send({ image: video }),
+                onFrame: async () => {
+                    await selfieSegmentation.send({ image: video });
+                },
                 width: 640,
                 height: 480,
             });
+
             camera.start();
         };
 
-        // Initialize PeerJS, media, and call logic
         const initPeer = async () => {
             const localStream = await navigator.mediaDevices.getUserMedia({
                 video: true,
                 audio: false,
             });
+
             localVideoRef.current.srcObject = localStream;
             localVideoRef.current.play();
+
+            // Apply segmentation to local video (Person B)
+            loadSegmentation(localVideoRef.current);
 
             const peer = new Peer();
 
             peer.on("open", (id) => {
                 setPeerId(id);
 
-                if (roomId) {
-                    // Person B: join and segment local stream
-                    loadSegmentation(localVideoRef.current, localFrame);
+                if (!roomId) {
+                    // Person A (room creator)
+                    setIsRoomCreator(true);
+                } else {
+                    // Person B joins
                     const call = peer.call(roomId, localStream);
                     call.on("stream", (remoteStream) => {
                         remoteVideoRef.current.srcObject = remoteStream;
@@ -119,13 +109,10 @@ export default function Room() {
             });
 
             peer.on("call", (call) => {
-                // Person A answers Person B's call
-                call.answer(localStream);
+                call.answer(localStream); // A answers B
                 call.on("stream", (remoteStream) => {
                     remoteVideoRef.current.srcObject = remoteStream;
                     remoteVideoRef.current.play();
-                    // NEW: Apply segmentation to the remote stream for Person A
-                    loadSegmentation(remoteVideoRef.current, remoteFrame);
                     setConnected(true);
                 });
             });
@@ -134,7 +121,7 @@ export default function Room() {
         };
 
         initPeer();
-    }, [roomId]); // run once per roomId
+    }, [roomId]);
 
     return (
         <div className="flex flex-col items-center justify-center min-h-screen p-4">
@@ -146,7 +133,7 @@ export default function Room() {
 
             {isRoomCreator && peerId && (
                 <p className="mb-4">
-                    Share this link with your friend:<br />
+                    Share this link with your friend to join: <br />
                     <code className="text-blue-600">
                         {`${window.location.origin}/room/${peerId}`}
                     </code>
@@ -163,11 +150,7 @@ export default function Room() {
                         height={480}
                         className="rounded-lg border border-gray-400"
                     />
-                    {!connected && !isRoomCreator && (
-                        <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white rounded-lg">
-                            Waiting for connection...
-                        </div>
-                    )}
+                    {!connected && !isRoomCreator && <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white rounded-lg">Waiting for connection...</div>}
                 </div>
 
                 {/* Person B's segmented video */}
@@ -179,11 +162,7 @@ export default function Room() {
                         height={480}
                         className="rounded-lg border border-gray-400"
                     />
-                    {!connected && isRoomCreator && (
-                        <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white rounded-lg">
-                            Waiting for connection...
-                        </div>
-                    )}
+                    {!connected && isRoomCreator && <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white rounded-lg">Waiting for connection...</div>}
                 </div>
             </div>
 
