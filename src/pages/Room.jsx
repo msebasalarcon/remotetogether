@@ -8,6 +8,8 @@ import "@mediapipe/selfie_segmentation/selfie_segmentation";
 export default function Room() {
     const { roomId } = useParams();
     const isRoomCreator = !roomId;
+    const isPersonA = isRoomCreator; // Person A is the creator
+    const isPersonB = !isRoomCreator; // Person B is the joiner
 
     const localVideoRef = useRef(null);
     const remoteVideoRef = useRef(null);
@@ -24,8 +26,10 @@ export default function Room() {
             const ctxA = canvasA.getContext("2d");
             const ctxB = canvasB.getContext("2d");
 
-            const personAStream = isRoomCreator ? localVideoRef.current : remoteVideoRef.current;
-            const personBStream = isRoomCreator ? remoteVideoRef.current : localVideoRef.current;
+            // Always match Person A and Person B to the correct video sources
+            // Person A is always the creator, Person B is always the joiner
+            const personAVideo = isRoomCreator ? localVideoRef.current : remoteVideoRef.current;
+            const personBVideo = isRoomCreator ? remoteVideoRef.current : localVideoRef.current;
 
             // Set up segmentation
             const segmentor = new SelfieSegmentation({
@@ -44,14 +48,14 @@ export default function Room() {
             const offCtx = offscreen.getContext("2d");
 
             const drawLoop = async () => {
-                // Draw Person A (full)
-                if (personAStream.readyState >= 2) {
-                    ctxA.drawImage(personAStream, 0, 0, canvasA.width, canvasA.height);
+                // Draw Person A (full, no effects)
+                if (personAVideo.readyState >= 2) {
+                    ctxA.drawImage(personAVideo, 0, 0, canvasA.width, canvasA.height);
                 }
 
-                // Draw Person B with background removed
-                if (personBStream.readyState >= 2) {
-                    offCtx.drawImage(personBStream, 0, 0, offscreen.width, offscreen.height);
+                // Draw Person B with background removed (always)
+                if (personBVideo.readyState >= 2) {
+                    offCtx.drawImage(personBVideo, 0, 0, offscreen.width, offscreen.height);
 
                     const imageData = offCtx.getImageData(0, 0, offscreen.width, offscreen.height);
 
@@ -65,7 +69,7 @@ export default function Room() {
                             ctxB.drawImage(results.segmentationMask, 0, 0, canvasB.width, canvasB.height);
 
                             ctxB.globalCompositeOperation = "source-in";
-                            ctxB.drawImage(personBStream, 0, 0, canvasB.width, canvasB.height);
+                            ctxB.drawImage(personBVideo, 0, 0, canvasB.width, canvasB.height);
 
                             ctxB.restore();
                         }
