@@ -1,87 +1,45 @@
+// pages/Room.jsx
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import Peer from "peerjs";
 
 export default function Room() {
     const { roomId } = useParams();
-    const compositeCanvasRef = useRef(null);
+    const isRoomCreator = !roomId;
+
     const localVideoRef = useRef(null);
     const remoteVideoRef = useRef(null);
-    const [peerId, setPeerId] = useState(null);
-    const [isRoomCreator, setIsRoomCreator] = useState(false);
-    const [connected, setConnected] = useState(false);
+    const personACanvasRef = useRef(null);
+    const personBCanvasRef = useRef(null);
 
-    const localFrame = useRef({ image: null, mask: null });
+    const [peerId, setPeerId] = useState(null);
+    const [connected, setConnected] = useState(false);
 
     useEffect(() => {
         const drawCanvas = () => {
-            const canvas = compositeCanvasRef.current;
-            const ctx = canvas.getContext("2d");
-            const w = canvas.width;
-            const h = canvas.height;
+            const personACanvas = personACanvasRef.current;
+            const personBCanvas = personBCanvasRef.current;
+            const personAStream = isRoomCreator ? localVideoRef.current : remoteVideoRef.current;
+            const personBStream = isRoomCreator ? remoteVideoRef.current : localVideoRef.current;
 
-            ctx.clearRect(0, 0, w, h);
+            const ctxA = personACanvas?.getContext("2d");
+            const ctxB = personBCanvas?.getContext("2d");
 
-            const backgroundVideo = isRoomCreator ? localVideoRef.current : remoteVideoRef.current;
-            if (backgroundVideo && backgroundVideo.readyState >= 2) {
-                ctx.drawImage(backgroundVideo, 0, 0, w, h);
+            if (personAStream && personAStream.readyState >= 2) {
+                ctxA.clearRect(0, 0, personACanvas.width, personACanvas.height);
+                ctxA.drawImage(personAStream, 0, 0, personACanvas.width, personACanvas.height);
             }
 
-            // Person B draws themselves with segmentation
-            if (!isRoomCreator) {
-                const { image, mask } = localFrame.current;
-                if (image && mask) {
-                    ctx.save();
-                    ctx.drawImage(mask, 0, 0, w, h);
-                    ctx.globalCompositeOperation = "source-in";
-                    ctx.drawImage(image, 0, 0, w, h);
-                    ctx.restore();
-                }
+            if (personBStream && personBStream.readyState >= 2) {
+                ctxB.clearRect(0, 0, personBCanvas.width, personBCanvas.height);
+                ctxB.drawImage(personBStream, 0, 0, personBCanvas.width, personBCanvas.height);
             }
+
+            requestAnimationFrame(drawCanvas);
         };
 
-        const drawLoop = () => {
-            drawCanvas();
-            requestAnimationFrame(drawLoop);
-        };
-
-        const loadSegmentation = async (videoElement) => {
-            const { SelfieSegmentation } = await import("@mediapipe/selfie_segmentation");
-            const { Camera } = await import("@mediapipe/camera_utils");
-
-            const segmentation = new SelfieSegmentation({
-                locateFile: (file) =>
-                    `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
-            });
-
-            segmentation.setOptions({ modelSelection: 1 });
-
-            segmentation.onResults((results) => {
-                if (results.segmentationMask) {
-                    localFrame.current = {
-                        image: results.image,
-                        mask: results.segmentationMask,
-                    };
-                }
-            });
-
-            const camera = new Camera(videoElement, {
-                onFrame: async () => {
-                    await segmentation.send({ image: videoElement });
-                },
-                width: 640,
-                height: 480,
-            });
-
-            camera.start();
-        };
-
-        const initPeer = async () => {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: true,
-                audio: false,
-            });
-
+        const init = async () => {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
             localVideoRef.current.srcObject = stream;
             await localVideoRef.current.play();
 
@@ -89,17 +47,16 @@ export default function Room() {
 
             peer.on("open", (id) => {
                 setPeerId(id);
-                if (!roomId) {
-                    setIsRoomCreator(true);
-                } else {
-                    // B joins A
-                    const call = peer.call(roomId, stream);
-                    call.on("stream", (remoteStream) => {
-                        remoteVideoRef.current.srcObject = remoteStream;
-                        remoteVideoRef.current.play();
-                        setConnected(true);
-                    });
-                }
+
+                if (!roomId) return;
+
+                // Joiner: Call roomId
+                const call = peer.call(roomId, stream);
+                call.on("stream", (remoteStream) => {
+                    remoteVideoRef.current.srcObject = remoteStream;
+                    remoteVideoRef.current.play();
+                    setConnected(true);
+                });
             });
 
             peer.on("call", (call) => {
@@ -111,65 +68,37 @@ export default function Room() {
                 });
             });
 
-            if (roomId) {
-                await loadSegmentation(localVideoRef.current); // Only Person B segments themselves
-            }
-
-            drawLoop(); // Start drawing
+            requestAnimationFrame(drawCanvas);
         };
 
-        initPeer();
+        init();
     }, [roomId]);
 
-    const takeScreenshot = () => {
-        const canvas = compositeCanvasRef.current;
-        const link = document.createElement("a");
-        link.download = "virtual-selfie.png";
-        link.href = canvas.toDataURL("image/png");
-        link.click();
-    };
-
     return (
-        <div className="flex flex-col items-center justify-center min-h-screen p-6 space-y-6">
-            <h2 className="text-2xl font-bold">
-                {isRoomCreator ? "🅰️ Person A (Room Creator)" : "🅱️ Person B (Joiner)"}
-            </h2>
-
-            <div className="text-sm text-gray-600">
-                Your Peer ID: <span className="font-mono">{peerId}</span>
-            </div>
+        <div className="flex flex-col items-center gap-4 p-6">
+            <h2 className="text-2xl font-bold">{isRoomCreator ? "🅰 Person A (Creator)" : "🅱 Person B (Joiner)"}</h2>
+            <p>Your Peer ID: <code>{peerId}</code></p>
 
             {isRoomCreator && peerId && (
-                <div className="text-center text-blue-700">
-                    Share this link with your friend: <br />
+                <p>
+                    Share this link:{" "}
                     <code>{`${window.location.origin}/room/${peerId}`}</code>
-                </div>
+                </p>
             )}
 
-            <div className="relative">
-                <canvas
-                    ref={compositeCanvasRef}
-                    width={640}
-                    height={480}
-                    className="rounded-lg border shadow"
-                />
-                {!connected && (
-                    <div className="absolute inset-0 bg-black bg-opacity-60 flex items-center justify-center text-white text-lg rounded-lg">
-                        {isRoomCreator ? "Waiting for Person B..." : "Connecting to Room..."}
-                    </div>
-                )}
+            <div className="flex gap-4">
+                <div>
+                    <h3 className="font-semibold text-center mb-2">🅰 Person A (Full)</h3>
+                    <canvas ref={personACanvasRef} width={640} height={480} className="border shadow" />
+                </div>
+                <div>
+                    <h3 className="font-semibold text-center mb-2">🅱 Person B (Full)</h3>
+                    <canvas ref={personBCanvasRef} width={640} height={480} className="border shadow" />
+                </div>
             </div>
 
-            <button
-                onClick={takeScreenshot}
-                className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg"
-            >
-                📸 Take Virtual Photo
-            </button>
-
-            {/* Hidden video elements */}
-            <video ref={localVideoRef} autoPlay muted playsInline className="hidden" />
-            <video ref={remoteVideoRef} autoPlay playsInline className="hidden" />
+            <video ref={localVideoRef} muted playsInline className="hidden" />
+            <video ref={remoteVideoRef} playsInline className="hidden" />
         </div>
     );
 }
