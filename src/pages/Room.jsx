@@ -4,8 +4,7 @@ import { useParams } from "react-router-dom";
 
 export default function Room() {
     const { roomId } = useParams();
-    const personACanvasRef = useRef(null);
-    const personBCanvasRef = useRef(null);
+    const compositeCanvasRef = useRef(null);
     const localVideoRef = useRef(null);
     const remoteVideoRef = useRef(null);
 
@@ -15,37 +14,47 @@ export default function Room() {
 
     // Store frame data for segmentation
     const localFrame = useRef({ image: null, mask: null });
-    const remoteFrame = useRef({ image: null, mask: null });
 
     useEffect(() => {
-        const drawCanvases = () => {
-            // Draw Person A's normal video on top canvas
-            const personACanvas = personACanvasRef.current;
-            const ctxA = personACanvas.getContext("2d");
-            ctxA.clearRect(0, 0, personACanvas.width, personACanvas.height);
+        const drawCanvas = () => {
+            const canvas = compositeCanvasRef.current;
+            const ctx = canvas.getContext("2d");
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // Always show remote stream as Person A (with background)
-            if (remoteVideoRef.current && remoteVideoRef.current.readyState >= 2) {
-                ctxA.drawImage(remoteVideoRef.current, 0, 0, personACanvas.width, personACanvas.height);
+            // First, draw Person A's video (with background)
+            if (isRoomCreator) {
+                // If I'm Person A, draw my local video as background
+                if (localVideoRef.current && localVideoRef.current.readyState >= 2) {
+                    ctx.drawImage(localVideoRef.current, 0, 0, canvas.width, canvas.height);
+                }
+            } else {
+                // If I'm Person B, draw the remote video (Person A) as background
+                if (remoteVideoRef.current && remoteVideoRef.current.readyState >= 2) {
+                    ctx.drawImage(remoteVideoRef.current, 0, 0, canvas.width, canvas.height);
+                }
             }
 
-            // Draw Person B's segmented video on bottom canvas
-            const personBCanvas = personBCanvasRef.current;
-            const ctxB = personBCanvas.getContext("2d");
-            ctxB.clearRect(0, 0, personBCanvas.width, personBCanvas.height);
-
-            // Always show local stream as Person B (with background removed)
-            if (localFrame.current.image && localFrame.current.mask) {
-                ctxB.save();
-                ctxB.drawImage(localFrame.current.mask, 0, 0, personBCanvas.width, personBCanvas.height);
-                ctxB.globalCompositeOperation = "source-in";
-                ctxB.drawImage(localFrame.current.image, 0, 0, personBCanvas.width, personBCanvas.height);
-                ctxB.restore();
+            // Then, composite Person B's video (without background) on top
+            if (isRoomCreator) {
+                // If I'm Person A, draw remote video (Person B) without background
+                if (remoteVideoRef.current && remoteVideoRef.current.readyState >= 2 && connected) {
+                    // We'll receive the segmented video directly from Person B
+                    ctx.drawImage(remoteVideoRef.current, 0, 0, canvas.width, canvas.height);
+                }
+            } else {
+                // If I'm Person B, draw my local video without background
+                if (localFrame.current.image && localFrame.current.mask) {
+                    ctx.save();
+                    ctx.drawImage(localFrame.current.mask, 0, 0, canvas.width, canvas.height);
+                    ctx.globalCompositeOperation = "source-in";
+                    ctx.drawImage(localFrame.current.image, 0, 0, canvas.width, canvas.height);
+                    ctx.restore();
+                }
             }
         };
 
         const drawLoop = () => {
-            drawCanvases();
+            drawCanvas();
             requestAnimationFrame(drawLoop);
         };
 
@@ -86,8 +95,10 @@ export default function Room() {
             localVideoRef.current.srcObject = localStream;
             localVideoRef.current.play();
 
-            // Apply segmentation to local video (Person B)
-            loadSegmentation(localVideoRef.current);
+            // Only apply segmentation if we're Person B
+            if (roomId) {
+                loadSegmentation(localVideoRef.current);
+            }
 
             const peer = new Peer();
 
@@ -121,7 +132,7 @@ export default function Room() {
         };
 
         initPeer();
-    }, [roomId]);
+    }, [roomId, isRoomCreator]);
 
     return (
         <div className="flex flex-col items-center justify-center min-h-screen p-4">
@@ -141,28 +152,19 @@ export default function Room() {
             )}
 
             <div className="flex flex-col items-center gap-4">
-                {/* Person A's full video */}
                 <div className="relative">
-                    <h3 className="text-lg font-semibold mb-2">Person A (with background)</h3>
+                    <h3 className="text-lg font-semibold mb-2">Composite View</h3>
                     <canvas
-                        ref={personACanvasRef}
+                        ref={compositeCanvasRef}
                         width={640}
                         height={480}
                         className="rounded-lg border border-gray-400"
                     />
-                    {!connected && !isRoomCreator && <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white rounded-lg">Waiting for connection...</div>}
-                </div>
-
-                {/* Person B's segmented video */}
-                <div className="relative">
-                    <h3 className="text-lg font-semibold mb-2">Person B (background removed)</h3>
-                    <canvas
-                        ref={personBCanvasRef}
-                        width={640}
-                        height={480}
-                        className="rounded-lg border border-gray-400"
-                    />
-                    {!connected && isRoomCreator && <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white rounded-lg">Waiting for connection...</div>}
+                    {!connected && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white rounded-lg">
+                            {isRoomCreator ? "Waiting for Person B to join..." : "Connecting to room..."}
+                        </div>
+                    )}
                 </div>
             </div>
 
