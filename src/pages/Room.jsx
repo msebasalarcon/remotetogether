@@ -7,6 +7,7 @@ export default function Room() {
     const compositeCanvasRef = useRef(null);
     const localVideoRef = useRef(null);
     const remoteVideoRef = useRef(null);
+    const animationFrameRef = useRef(null);
 
     const [peerId, setPeerId] = useState(null);
     const [isRoomCreator, setIsRoomCreator] = useState(false);
@@ -14,7 +15,8 @@ export default function Room() {
 
     // Store segmentation data
     const segmentationData = useRef({
-        personB: { image: null, mask: null }
+        personB: { image: null, mask: null },
+        isProcessing: false
     });
 
     useEffect(() => {
@@ -28,26 +30,30 @@ export default function Room() {
             const ctx = canvas.getContext("2d");
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // Always draw Person A's video as background
+            // Draw Person A's video as background
             const backgroundVideo = isRoomCreator ? localVideoRef.current : remoteVideoRef.current;
             if (backgroundVideo?.readyState >= 2) {
                 ctx.drawImage(backgroundVideo, 0, 0, canvas.width, canvas.height);
             }
 
-            // Draw Person B's segmented video on top if available
+            // Draw Person B's segmented video on top
             const personBData = segmentationData.current.personB;
-            if (personBData.image && personBData.mask) {
-                ctx.save();
-                ctx.drawImage(personBData.mask, 0, 0, canvas.width, canvas.height);
-                ctx.globalCompositeOperation = "source-in";
-                ctx.drawImage(personBData.image, 0, 0, canvas.width, canvas.height);
-                ctx.restore();
+            if (personBData.image && personBData.mask && !segmentationData.current.isProcessing) {
+                try {
+                    ctx.save();
+                    // Draw the mask
+                    ctx.drawImage(personBData.mask, 0, 0, canvas.width, canvas.height);
+                    // Use the mask as a clipping path
+                    ctx.globalCompositeOperation = "source-in";
+                    // Draw the actual video frame
+                    ctx.drawImage(personBData.image, 0, 0, canvas.width, canvas.height);
+                    ctx.restore();
+                } catch (error) {
+                    console.error("Error drawing segmented video:", error);
+                }
             }
-        };
 
-        const drawLoop = () => {
-            drawCanvas();
-            requestAnimationFrame(drawLoop);
+            animationFrameRef.current = requestAnimationFrame(drawCanvas);
         };
 
         const setupSegmentation = async () => {
@@ -63,13 +69,13 @@ export default function Room() {
                 });
 
                 selfieSegmentation.onResults((results) => {
-                    // Only store segmentation data if we're Person B
-                    if (!isRoomCreator) {
+                    if (!isRoomCreator && results.segmentationMask && results.image) {
                         segmentationData.current.personB = {
                             image: results.image,
                             mask: results.segmentationMask,
                         };
                     }
+                    segmentationData.current.isProcessing = false;
                 });
 
                 return selfieSegmentation;
@@ -79,40 +85,52 @@ export default function Room() {
             }
         };
 
-        const startCamera = async (video, segmentation) => {
+        const processFrame = async (segmentation, video) => {
+            if (!segmentation || segmentationData.current.isProcessing) return;
             try {
-                const { Camera } = await import("@mediapipe/camera_utils");
-                camera = new Camera(video, {
-                    onFrame: async () => {
-                        if (segmentation) {
-                            await segmentation.send({ image: video });
-                        }
-                    },
-                    width: 640,
-                    height: 480,
-                });
-                await camera.start();
+                segmentationData.current.isProcessing = true;
+                await segmentation.send({ image: video });
             } catch (error) {
-                console.error("Error starting camera:", error);
+                console.error("Error processing frame:", error);
+                segmentationData.current.isProcessing = false;
             }
+        };
+
+        const startVideoProcessing = async (video, segmentation) => {
+            if (!video || !segmentation) return;
+
+            const processNextFrame = async () => {
+                await processFrame(segmentation, video);
+                if (video.readyState >= 2) {
+                    requestAnimationFrame(processNextFrame);
+                }
+            };
+
+            video.addEventListener('play', () => {
+                processNextFrame();
+            });
         };
 
         const initPeer = async () => {
             try {
                 const localStream = await navigator.mediaDevices.getUserMedia({
-                    video: true,
+                    video: {
+                        width: 640,
+                        height: 480,
+                        frameRate: 30
+                    },
                     audio: false,
                 });
 
                 localVideoRef.current.srcObject = localStream;
                 await localVideoRef.current.play();
 
-                // If we're Person B, set up segmentation immediately
+                // Set up segmentation for Person B
                 let segmentation = null;
                 if (!isRoomCreator) {
                     segmentation = await setupSegmentation();
                     if (segmentation) {
-                        await startCamera(localVideoRef.current, segmentation);
+                        await startVideoProcessing(localVideoRef.current, segmentation);
                     }
                 }
 
@@ -160,7 +178,8 @@ export default function Room() {
                     setConnected(false);
                 });
 
-                drawLoop();
+                // Start the drawing loop
+                drawCanvas();
             } catch (error) {
                 console.error("Error in peer initialization:", error);
             }
@@ -174,6 +193,9 @@ export default function Room() {
             }
             if (selfieSegmentation) {
                 selfieSegmentation.close();
+            }
+            if (animationFrameRef.current) {
+                cancelAnimationFrame(animationFrameRef.current);
             }
         };
     }, [roomId, isRoomCreator]);
