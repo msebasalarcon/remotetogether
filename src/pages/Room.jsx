@@ -2,6 +2,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import Peer from "peerjs";
+import { SelfieSegmentation } from "@mediapipe/selfie_segmentation";
+import "@mediapipe/selfie_segmentation/selfie_segmentation";
 
 export default function Room() {
     const { roomId } = useParams();
@@ -13,29 +15,67 @@ export default function Room() {
     const personBCanvasRef = useRef(null);
 
     const [peerId, setPeerId] = useState(null);
-    const [connected, setConnected] = useState(false);
 
     useEffect(() => {
-        const drawCanvas = () => {
-            const personACanvas = personACanvasRef.current;
-            const personBCanvas = personBCanvasRef.current;
+        const drawCanvases = async () => {
+            const canvasA = personACanvasRef.current;
+            const canvasB = personBCanvasRef.current;
+
+            const ctxA = canvasA.getContext("2d");
+            const ctxB = canvasB.getContext("2d");
+
             const personAStream = isRoomCreator ? localVideoRef.current : remoteVideoRef.current;
             const personBStream = isRoomCreator ? remoteVideoRef.current : localVideoRef.current;
 
-            const ctxA = personACanvas?.getContext("2d");
-            const ctxB = personBCanvas?.getContext("2d");
+            // Set up segmentation
+            const segmentor = new SelfieSegmentation({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
+            });
 
-            if (personAStream && personAStream.readyState >= 2) {
-                ctxA.clearRect(0, 0, personACanvas.width, personACanvas.height);
-                ctxA.drawImage(personAStream, 0, 0, personACanvas.width, personACanvas.height);
-            }
+            segmentor.setOptions({
+                modelSelection: 1,
+            });
 
-            if (personBStream && personBStream.readyState >= 2) {
-                ctxB.clearRect(0, 0, personBCanvas.width, personBCanvas.height);
-                ctxB.drawImage(personBStream, 0, 0, personBCanvas.width, personBCanvas.height);
-            }
+            await segmentor.initialize();
 
-            requestAnimationFrame(drawCanvas);
+            const offscreen = document.createElement("canvas");
+            offscreen.width = 640;
+            offscreen.height = 480;
+            const offCtx = offscreen.getContext("2d");
+
+            const drawLoop = async () => {
+                // Draw Person A (full)
+                if (personAStream.readyState >= 2) {
+                    ctxA.drawImage(personAStream, 0, 0, canvasA.width, canvasA.height);
+                }
+
+                // Draw Person B with background removed
+                if (personBStream.readyState >= 2) {
+                    offCtx.drawImage(personBStream, 0, 0, offscreen.width, offscreen.height);
+
+                    const imageData = offCtx.getImageData(0, 0, offscreen.width, offscreen.height);
+
+                    await segmentor.send({ image: offscreen });
+
+                    segmentor.onResults((results) => {
+                        ctxB.clearRect(0, 0, canvasB.width, canvasB.height);
+
+                        if (results.segmentationMask) {
+                            ctxB.save();
+                            ctxB.drawImage(results.segmentationMask, 0, 0, canvasB.width, canvasB.height);
+
+                            ctxB.globalCompositeOperation = "source-in";
+                            ctxB.drawImage(personBStream, 0, 0, canvasB.width, canvasB.height);
+
+                            ctxB.restore();
+                        }
+                    });
+                }
+
+                requestAnimationFrame(drawLoop);
+            };
+
+            drawLoop();
         };
 
         const init = async () => {
@@ -50,25 +90,27 @@ export default function Room() {
 
                 if (!roomId) return;
 
-                // Joiner: Call roomId
                 const call = peer.call(roomId, stream);
-                call.on("stream", (remoteStream) => {
+                call.on("stream", async (remoteStream) => {
                     remoteVideoRef.current.srcObject = remoteStream;
-                    remoteVideoRef.current.play();
-                    setConnected(true);
+                    await remoteVideoRef.current.play();
+                    drawCanvases();
                 });
             });
 
             peer.on("call", (call) => {
                 call.answer(stream);
-                call.on("stream", (remoteStream) => {
+                call.on("stream", async (remoteStream) => {
                     remoteVideoRef.current.srcObject = remoteStream;
-                    remoteVideoRef.current.play();
-                    setConnected(true);
+                    await remoteVideoRef.current.play();
+                    drawCanvases();
                 });
             });
 
-            requestAnimationFrame(drawCanvas);
+            // If you're alone, start drawing yourself
+            if (isRoomCreator && !roomId) {
+                drawCanvases();
+            }
         };
 
         init();
@@ -92,7 +134,7 @@ export default function Room() {
                     <canvas ref={personACanvasRef} width={640} height={480} className="border shadow" />
                 </div>
                 <div>
-                    <h3 className="font-semibold text-center mb-2">🅱 Person B (Full)</h3>
+                    <h3 className="font-semibold text-center mb-2">🅱 Person B (No Background)</h3>
                     <canvas ref={personBCanvasRef} width={640} height={480} className="border shadow" />
                 </div>
             </div>
