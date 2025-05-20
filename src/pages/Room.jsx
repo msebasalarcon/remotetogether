@@ -1,13 +1,12 @@
-import Peer from "peerjs";
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
+import Peer from "peerjs";
 
 export default function Room() {
     const { roomId } = useParams();
     const compositeCanvasRef = useRef(null);
     const localVideoRef = useRef(null);
     const remoteVideoRef = useRef(null);
-
     const [peerId, setPeerId] = useState(null);
     const [isRoomCreator, setIsRoomCreator] = useState(false);
     const [connected, setConnected] = useState(false);
@@ -17,33 +16,26 @@ export default function Room() {
     useEffect(() => {
         const drawCanvas = () => {
             const canvas = compositeCanvasRef.current;
-            if (!canvas) return;
-
             const ctx = canvas.getContext("2d");
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const w = canvas.width;
+            const h = canvas.height;
 
-            // Background: Always draw Person A (host)
+            ctx.clearRect(0, 0, w, h);
+
             const backgroundVideo = isRoomCreator ? localVideoRef.current : remoteVideoRef.current;
             if (backgroundVideo && backgroundVideo.readyState >= 2) {
-                ctx.drawImage(backgroundVideo, 0, 0, canvas.width, canvas.height);
+                ctx.drawImage(backgroundVideo, 0, 0, w, h);
             }
 
-            // Foreground: Draw Person B (guest) with background removed
+            // Person B draws themselves with segmentation
             if (!isRoomCreator) {
-                // If I’m Person B, draw myself with segmentation
                 const { image, mask } = localFrame.current;
                 if (image && mask) {
                     ctx.save();
-                    ctx.drawImage(mask, 0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(mask, 0, 0, w, h);
                     ctx.globalCompositeOperation = "source-in";
-                    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(image, 0, 0, w, h);
                     ctx.restore();
-                }
-            } else {
-                // If I’m Person A, draw Person B (already pre-segmented)
-                const overlayVideo = remoteVideoRef.current;
-                if (overlayVideo && overlayVideo.readyState >= 2) {
-                    ctx.drawImage(overlayVideo, 0, 0, canvas.width, canvas.height);
                 }
             }
         };
@@ -65,10 +57,12 @@ export default function Room() {
             segmentation.setOptions({ modelSelection: 1 });
 
             segmentation.onResults((results) => {
-                localFrame.current = {
-                    image: results.image,
-                    mask: results.segmentationMask,
-                };
+                if (results.segmentationMask) {
+                    localFrame.current = {
+                        image: results.image,
+                        mask: results.segmentationMask,
+                    };
+                }
             });
 
             const camera = new Camera(videoElement, {
@@ -92,13 +86,13 @@ export default function Room() {
             await localVideoRef.current.play();
 
             const peer = new Peer();
+
             peer.on("open", (id) => {
                 setPeerId(id);
-
                 if (!roomId) {
                     setIsRoomCreator(true);
                 } else {
-                    // Person B (joiner)
+                    // B joins A
                     const call = peer.call(roomId, stream);
                     call.on("stream", (remoteStream) => {
                         remoteVideoRef.current.srcObject = remoteStream;
@@ -118,11 +112,10 @@ export default function Room() {
             });
 
             if (roomId) {
-                // B only
-                await loadSegmentation(localVideoRef.current);
+                await loadSegmentation(localVideoRef.current); // Only Person B segments themselves
             }
 
-            drawLoop();
+            drawLoop(); // Start drawing
         };
 
         initPeer();
