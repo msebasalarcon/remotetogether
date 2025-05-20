@@ -7,197 +7,131 @@ export default function Room() {
     const compositeCanvasRef = useRef(null);
     const localVideoRef = useRef(null);
     const remoteVideoRef = useRef(null);
-    const animationFrameRef = useRef(null);
 
     const [peerId, setPeerId] = useState(null);
     const [isRoomCreator, setIsRoomCreator] = useState(false);
     const [connected, setConnected] = useState(false);
 
-    // Store segmentation data
-    const segmentationData = useRef({
-        personB: { image: null, mask: null },
-        isProcessing: false
-    });
+    // Store frame data for segmentation
+    const localFrame = useRef({ image: null, mask: null });
 
     useEffect(() => {
-        let selfieSegmentation = null;
-        let camera = null;
-
         const drawCanvas = () => {
             const canvas = compositeCanvasRef.current;
-            if (!canvas) return;
-
             const ctx = canvas.getContext("2d");
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // Draw Person A's video as background
-            const backgroundVideo = isRoomCreator ? localVideoRef.current : remoteVideoRef.current;
-            if (backgroundVideo?.readyState >= 2) {
-                ctx.drawImage(backgroundVideo, 0, 0, canvas.width, canvas.height);
+            // First, draw Person A's video (with background)
+            if (isRoomCreator) {
+                // If I'm Person A, draw my local video as background
+                if (localVideoRef.current && localVideoRef.current.readyState >= 2) {
+                    ctx.drawImage(localVideoRef.current, 0, 0, canvas.width, canvas.height);
+                }
+            } else {
+                // If I'm Person B, draw the remote video (Person A) as background
+                if (remoteVideoRef.current && remoteVideoRef.current.readyState >= 2) {
+                    ctx.drawImage(remoteVideoRef.current, 0, 0, canvas.width, canvas.height);
+                }
             }
 
-            // Draw Person B's segmented video on top
-            const personBData = segmentationData.current.personB;
-            if (personBData.image && personBData.mask && !segmentationData.current.isProcessing) {
-                try {
+            // Then, composite Person B's video (without background) on top
+            if (isRoomCreator) {
+                // If I'm Person A, draw remote video (Person B) without background
+                if (remoteVideoRef.current && remoteVideoRef.current.readyState >= 2 && connected) {
+                    // We'll receive the segmented video directly from Person B
+                    ctx.drawImage(remoteVideoRef.current, 0, 0, canvas.width, canvas.height);
+                }
+            } else {
+                // If I'm Person B, draw my local video without background
+                if (localFrame.current.image && localFrame.current.mask) {
                     ctx.save();
-                    // Draw the mask
-                    ctx.drawImage(personBData.mask, 0, 0, canvas.width, canvas.height);
-                    // Use the mask as a clipping path
+                    ctx.drawImage(localFrame.current.mask, 0, 0, canvas.width, canvas.height);
                     ctx.globalCompositeOperation = "source-in";
-                    // Draw the actual video frame
-                    ctx.drawImage(personBData.image, 0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(localFrame.current.image, 0, 0, canvas.width, canvas.height);
                     ctx.restore();
-                } catch (error) {
-                    console.error("Error drawing segmented video:", error);
                 }
             }
-
-            animationFrameRef.current = requestAnimationFrame(drawCanvas);
         };
 
-        const setupSegmentation = async () => {
-            try {
-                const { SelfieSegmentation } = await import("@mediapipe/selfie_segmentation");
-                selfieSegmentation = new SelfieSegmentation({
-                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
-                });
-
-                selfieSegmentation.setOptions({
-                    modelSelection: 1,
-                    selfieMode: true,
-                });
-
-                selfieSegmentation.onResults((results) => {
-                    if (!isRoomCreator && results.segmentationMask && results.image) {
-                        segmentationData.current.personB = {
-                            image: results.image,
-                            mask: results.segmentationMask,
-                        };
-                    }
-                    segmentationData.current.isProcessing = false;
-                });
-
-                return selfieSegmentation;
-            } catch (error) {
-                console.error("Error setting up segmentation:", error);
-                return null;
-            }
+        const drawLoop = () => {
+            drawCanvas();
+            requestAnimationFrame(drawLoop);
         };
 
-        const processFrame = async (segmentation, video) => {
-            if (!segmentation || segmentationData.current.isProcessing) return;
-            try {
-                segmentationData.current.isProcessing = true;
-                await segmentation.send({ image: video });
-            } catch (error) {
-                console.error("Error processing frame:", error);
-                segmentationData.current.isProcessing = false;
-            }
-        };
+        const loadSegmentation = async (video) => {
+            const { SelfieSegmentation } = await import("@mediapipe/selfie_segmentation");
+            const { Camera } = await import("@mediapipe/camera_utils");
 
-        const startVideoProcessing = async (video, segmentation) => {
-            if (!video || !segmentation) return;
-
-            const processNextFrame = async () => {
-                await processFrame(segmentation, video);
-                if (video.readyState >= 2) {
-                    requestAnimationFrame(processNextFrame);
-                }
-            };
-
-            video.addEventListener('play', () => {
-                processNextFrame();
+            const selfieSegmentation = new SelfieSegmentation({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
             });
+
+            selfieSegmentation.setOptions({ modelSelection: 1 });
+
+            selfieSegmentation.onResults((results) => {
+                localFrame.current = {
+                    image: results.image,
+                    mask: results.segmentationMask,
+                };
+            });
+
+            const camera = new Camera(video, {
+                onFrame: async () => {
+                    await selfieSegmentation.send({ image: video });
+                },
+                width: 640,
+                height: 480,
+            });
+
+            camera.start();
         };
 
         const initPeer = async () => {
-            try {
-                const localStream = await navigator.mediaDevices.getUserMedia({
-                    video: {
-                        width: 640,
-                        height: 480,
-                        frameRate: 30
-                    },
-                    audio: false,
-                });
+            const localStream = await navigator.mediaDevices.getUserMedia({
+                video: true,
+                audio: false,
+            });
 
-                localVideoRef.current.srcObject = localStream;
-                await localVideoRef.current.play();
+            localVideoRef.current.srcObject = localStream;
+            localVideoRef.current.play();
 
-                // Set up segmentation for Person B
-                let segmentation = null;
-                if (!isRoomCreator) {
-                    segmentation = await setupSegmentation();
-                    if (segmentation) {
-                        await startVideoProcessing(localVideoRef.current, segmentation);
-                    }
-                }
+            // Only apply segmentation if we're Person B
+            if (roomId) {
+                loadSegmentation(localVideoRef.current);
+            }
 
-                const peer = new Peer({
-                    config: {
-                        iceServers: [
-                            { urls: "stun:stun.l.google.com:19302" },
-                            { urls: "stun:stun1.l.google.com:19302" },
-                        ],
-                    },
-                });
+            const peer = new Peer();
 
-                peer.on("open", (id) => {
-                    setPeerId(id);
-                    if (!roomId) {
-                        setIsRoomCreator(true);
-                    } else {
-                        // Person B connects to Person A
-                        const call = peer.call(roomId, localStream);
-                        call.on("stream", async (remoteStream) => {
-                            remoteVideoRef.current.srcObject = remoteStream;
-                            await remoteVideoRef.current.play();
-                            setConnected(true);
-                        });
-                    }
-                });
+            peer.on("open", (id) => {
+                setPeerId(id);
 
-                peer.on("call", (call) => {
-                    // Person A answers Person B
-                    call.answer(localStream);
-                    call.on("stream", async (remoteStream) => {
+                if (!roomId) {
+                    // Person A (room creator)
+                    setIsRoomCreator(true);
+                } else {
+                    // Person B joins
+                    const call = peer.call(roomId, localStream);
+                    call.on("stream", (remoteStream) => {
                         remoteVideoRef.current.srcObject = remoteStream;
-                        await remoteVideoRef.current.play();
+                        remoteVideoRef.current.play();
                         setConnected(true);
                     });
-                });
+                }
+            });
 
-                peer.on("error", (error) => {
-                    console.error("Peer connection error:", error);
-                    setConnected(false);
+            peer.on("call", (call) => {
+                call.answer(localStream); // A answers B
+                call.on("stream", (remoteStream) => {
+                    remoteVideoRef.current.srcObject = remoteStream;
+                    remoteVideoRef.current.play();
+                    setConnected(true);
                 });
+            });
 
-                peer.on("disconnected", () => {
-                    console.log("Peer disconnected");
-                    setConnected(false);
-                });
-
-                // Start the drawing loop
-                drawCanvas();
-            } catch (error) {
-                console.error("Error in peer initialization:", error);
-            }
+            drawLoop();
         };
 
         initPeer();
-
-        return () => {
-            if (camera) {
-                camera.stop();
-            }
-            if (selfieSegmentation) {
-                selfieSegmentation.close();
-            }
-            if (animationFrameRef.current) {
-                cancelAnimationFrame(animationFrameRef.current);
-            }
-        };
     }, [roomId, isRoomCreator]);
 
     return (
@@ -219,9 +153,7 @@ export default function Room() {
 
             <div className="flex flex-col items-center gap-4">
                 <div className="relative">
-                    <h3 className="text-lg font-semibold mb-2">
-                        {connected ? "Connected - Composite View" : "Waiting for connection..."}
-                    </h3>
+                    <h3 className="text-lg font-semibold mb-2">Composite View</h3>
                     <canvas
                         ref={compositeCanvasRef}
                         width={640}
