@@ -24,9 +24,11 @@ export default function Room() {
             const ctxA = personACanvas.getContext("2d");
             ctxA.clearRect(0, 0, personACanvas.width, personACanvas.height);
 
-            // Always show remote stream as Person A (with background)
-            if (remoteVideoRef.current && remoteVideoRef.current.readyState >= 2) {
-                ctxA.drawImage(remoteVideoRef.current, 0, 0, personACanvas.width, personACanvas.height);
+            // For Person A (host), show local video as Person A (with background)
+            // For Person B (joiner), show remote video as Person A (with background)
+            const personAVideo = isRoomCreator ? localVideoRef.current : remoteVideoRef.current;
+            if (personAVideo && personAVideo.readyState >= 2) {
+                ctxA.drawImage(personAVideo, 0, 0, personACanvas.width, personACanvas.height);
             }
 
             // Draw Person B's segmented video on bottom canvas
@@ -34,12 +36,15 @@ export default function Room() {
             const ctxB = personBCanvas.getContext("2d");
             ctxB.clearRect(0, 0, personBCanvas.width, personBCanvas.height);
 
-            // Always show local stream as Person B (with background removed)
-            if (localFrame.current.image && localFrame.current.mask) {
+            // For Person A (host), show remote video as Person B (with background removed)
+            // For Person B (joiner), show local video as Person B (with background removed)
+            if ((isRoomCreator ? remoteFrame.current : localFrame.current).image &&
+                (isRoomCreator ? remoteFrame.current : localFrame.current).mask) {
+                const frame = isRoomCreator ? remoteFrame.current : localFrame.current;
                 ctxB.save();
-                ctxB.drawImage(localFrame.current.mask, 0, 0, personBCanvas.width, personBCanvas.height);
+                ctxB.drawImage(frame.mask, 0, 0, personBCanvas.width, personBCanvas.height);
                 ctxB.globalCompositeOperation = "source-in";
-                ctxB.drawImage(localFrame.current.image, 0, 0, personBCanvas.width, personBCanvas.height);
+                ctxB.drawImage(frame.image, 0, 0, personBCanvas.width, personBCanvas.height);
                 ctxB.restore();
             }
         };
@@ -49,7 +54,7 @@ export default function Room() {
             requestAnimationFrame(drawLoop);
         };
 
-        const loadSegmentation = async (video) => {
+        const loadSegmentation = async (video, isLocal) => {
             const { SelfieSegmentation } = await import("@mediapipe/selfie_segmentation");
             const { Camera } = await import("@mediapipe/camera_utils");
 
@@ -60,10 +65,17 @@ export default function Room() {
             selfieSegmentation.setOptions({ modelSelection: 1 });
 
             selfieSegmentation.onResults((results) => {
-                localFrame.current = {
-                    image: results.image,
-                    mask: results.segmentationMask,
-                };
+                if (isLocal) {
+                    localFrame.current = {
+                        image: results.image,
+                        mask: results.segmentationMask,
+                    };
+                } else {
+                    remoteFrame.current = {
+                        image: results.image,
+                        mask: results.segmentationMask,
+                    };
+                }
             });
 
             const camera = new Camera(video, {
@@ -86,8 +98,8 @@ export default function Room() {
             localVideoRef.current.srcObject = localStream;
             localVideoRef.current.play();
 
-            // Apply segmentation to local video (Person B)
-            loadSegmentation(localVideoRef.current);
+            // Apply segmentation to local video (Person B for joiner)
+            loadSegmentation(localVideoRef.current, true);
 
             const peer = new Peer();
 
@@ -114,6 +126,8 @@ export default function Room() {
                     remoteVideoRef.current.srcObject = remoteStream;
                     remoteVideoRef.current.play();
                     setConnected(true);
+                    // Apply segmentation to remote video (Person B for host)
+                    loadSegmentation(remoteVideoRef.current, false);
                 });
             });
 
