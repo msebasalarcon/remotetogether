@@ -1,3 +1,4 @@
+// Room.jsx
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import Peer from "peerjs";
@@ -17,15 +18,10 @@ export default function Room() {
     const displayVideoRef = useRef(null);
 
     useEffect(() => {
-        let peer, localStream, backgroundRemovedStream, compositeStream;
-        let animationFrameId;
-        let segmentor;
+        let peer, localStream, animationFrameId, segmentor;
 
         const start = async () => {
-            localStream = await navigator.mediaDevices.getUserMedia({
-                video: true,
-                audio: false,
-            });
+            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
             localVideoRef.current.srcObject = localStream;
             await localVideoRef.current.play();
 
@@ -35,38 +31,35 @@ export default function Room() {
                 setPeerId(id);
 
                 if (isPersonB) {
-                    // 🧠 Load MediaPipe with versioned CDN
+                    // Setup background removal for Person B
                     segmentor = new SelfieSegmentation({
                         locateFile: (file) =>
                             `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.4/${file}`,
                     });
                     segmentor.setOptions({ modelSelection: 1 });
-                    segmentor.onResults((results) => {
-                        const canvas = segmentationCanvasRef.current;
-                        const ctx = canvas.getContext("2d");
-                        ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+                    const segCanvas = segmentationCanvasRef.current;
+                    const segCtx = segCanvas.getContext("2d");
+
+                    segmentor.onResults((results) => {
+                        segCtx.clearRect(0, 0, segCanvas.width, segCanvas.height);
                         if (results.segmentationMask) {
-                            ctx.save();
-                            ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
-                            ctx.globalCompositeOperation = "source-in";
-                            ctx.drawImage(localVideoRef.current, 0, 0, canvas.width, canvas.height);
-                            ctx.restore();
+                            segCtx.save();
+                            segCtx.drawImage(results.segmentationMask, 0, 0, segCanvas.width, segCanvas.height);
+                            segCtx.globalCompositeOperation = "source-in";
+                            segCtx.drawImage(localVideoRef.current, 0, 0, segCanvas.width, segCanvas.height);
+                            segCtx.restore();
                         }
                     });
 
-                    await segmentor.initialize();
-
-                    const processFrame = () => {
-                        segmentor.send({ image: localVideoRef.current });
+                    const processFrame = async () => {
+                        await segmentor.send({ image: localVideoRef.current });
                         animationFrameId = requestAnimationFrame(processFrame);
                     };
                     processFrame();
 
-                    // ⛲ Capture Person B background-removed stream
-                    backgroundRemovedStream = segmentationCanvasRef.current.captureStream(30);
+                    const backgroundRemovedStream = segmentationCanvasRef.current.captureStream(30);
 
-                    // 📞 Call Person A with background-removed stream
                     const call = peer.call(roomId, backgroundRemovedStream);
                     call.on("stream", (finalCompositedStream) => {
                         displayVideoRef.current.srcObject = finalCompositedStream;
@@ -75,16 +68,16 @@ export default function Room() {
                 }
             });
 
-            // 👂 Handle incoming calls
             peer.on("call", (call) => {
                 if (!isRoomCreator) return;
 
-                call.answer(localStream); // Send A's full stream
+                // Answer with raw video (Person A)
+                call.answer(localStream);
 
-                call.on("stream", (bStream) => {
-                    remoteVideoRef.current.srcObject = bStream;
+                call.on("stream", (bProcessedStream) => {
+                    remoteVideoRef.current.srcObject = bProcessedStream;
                     remoteVideoRef.current.play();
-                    startCompositing(localStream, bStream);
+                    startCompositing(localStream, bProcessedStream);
                 });
             });
         };
@@ -105,23 +98,21 @@ export default function Room() {
 
             const draw = () => {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
-                ctx.drawImage(aVideo, 0, 0, canvas.width, canvas.height); // Full background
-                ctx.drawImage(bVideo, 0, 0, canvas.width, canvas.height); // Overlay person B
+                ctx.drawImage(aVideo, 0, 0, canvas.width, canvas.height); // Person A
+                ctx.drawImage(bVideo, 0, 0, canvas.width, canvas.height); // Person B (background removed)
                 animationFrameId = requestAnimationFrame(draw);
             };
-
             draw();
 
-            // 🔄 Send composite stream to B
-            compositeStream = canvas.captureStream(30);
-            const callBack = peer.call(peerId, compositeStream); // Call B with final stream
+            const compositedStream = canvas.captureStream(30);
+            const callBack = peer.call(peerId, compositedStream); // Send final result back to B
         };
 
         start();
 
         return () => {
             if (animationFrameId) cancelAnimationFrame(animationFrameId);
-            if (localStream) localStream.getTracks().forEach((t) => t.stop());
+            if (localStream) localStream.getTracks().forEach((track) => track.stop());
             if (peer) peer.destroy();
         };
     }, [roomId]);
@@ -164,7 +155,11 @@ export default function Room() {
             <div className="hidden">
                 <video ref={localVideoRef} muted playsInline />
                 <video ref={remoteVideoRef} playsInline />
-                <canvas ref={segmentationCanvasRef} width={640} height={480} />
+                <canvas
+                    ref={segmentationCanvasRef}
+                    width={640}
+                    height={480}
+                />
             </div>
         </div>
     );
