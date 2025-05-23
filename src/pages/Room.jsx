@@ -7,123 +7,128 @@ import { SelfieSegmentation } from "@mediapipe/selfie_segmentation";
 export default function Room() {
     const { roomId } = useParams();
     const isRoomCreator = !roomId;
-    const isPersonB = !isRoomCreator;
-
     const [peerId, setPeerId] = useState(null);
 
     const localVideoRef = useRef(null);
     const remoteVideoRef = useRef(null);
     const segmentationCanvasRef = useRef(null);
-    const outputCanvasRef = useRef(null);
-    const displayVideoRef = useRef(null);
+    const compositeCanvasRef = useRef(null);
+    const finalVideoRef = useRef(null);
 
     useEffect(() => {
-        let peer, localStream, animationFrameId, segmentor;
+        let peer, localStream, remoteStream, segmentor;
+        let animationFrame;
 
-        const start = async () => {
+        const setup = async () => {
+            peer = new Peer();
+            peer.on("open", (id) => {
+                setPeerId(id);
+                if (!isRoomCreator) {
+                    joinRoom(id);
+                }
+            });
+
             localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
             localVideoRef.current.srcObject = localStream;
             await localVideoRef.current.play();
 
-            peer = new Peer();
-
-            peer.on("open", async (id) => {
-                setPeerId(id);
-
-                if (isPersonB) {
-                    // Setup background removal for Person B
-                    segmentor = new SelfieSegmentation({
-                        locateFile: (file) =>
-                            `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.4/${file}`,
-                    });
-                    segmentor.setOptions({ modelSelection: 1 });
-
-                    const segCanvas = segmentationCanvasRef.current;
-                    const segCtx = segCanvas.getContext("2d");
-
-                    segmentor.onResults((results) => {
-                        segCtx.clearRect(0, 0, segCanvas.width, segCanvas.height);
-                        if (results.segmentationMask) {
-                            segCtx.save();
-                            segCtx.drawImage(results.segmentationMask, 0, 0, segCanvas.width, segCanvas.height);
-                            segCtx.globalCompositeOperation = "source-in";
-                            segCtx.drawImage(localVideoRef.current, 0, 0, segCanvas.width, segCanvas.height);
-                            segCtx.restore();
-                        }
-                    });
-
-                    const processFrame = async () => {
-                        await segmentor.send({ image: localVideoRef.current });
-                        animationFrameId = requestAnimationFrame(processFrame);
-                    };
-                    processFrame();
-
-                    const backgroundRemovedStream = segmentationCanvasRef.current.captureStream(30);
-
-                    const call = peer.call(roomId, backgroundRemovedStream);
-                    call.on("stream", (finalCompositedStream) => {
-                        displayVideoRef.current.srcObject = finalCompositedStream;
-                        displayVideoRef.current.play();
-                    });
-                }
-            });
-
-            peer.on("call", (call) => {
+            peer.on("call", async (call) => {
                 if (!isRoomCreator) return;
 
-                // Answer with raw video (Person A)
+                // Person A: Answer with full local video
                 call.answer(localStream);
 
-                call.on("stream", (bProcessedStream) => {
-                    remoteVideoRef.current.srcObject = bProcessedStream;
-                    remoteVideoRef.current.play();
-                    startCompositing(localStream, bProcessedStream);
+                // Get B's stream (background-removed)
+                call.on("stream", async (bStream) => {
+                    remoteVideoRef.current.srcObject = bStream;
+                    await remoteVideoRef.current.play();
+
+                    // Start compositing A + B
+                    startCompositing(localStream, bStream);
+
+                    // Send final composited stream back to B
+                    const compositeStream = compositeCanvasRef.current.captureStream(30);
+                    const returnCall = peer.call(call.peer, compositeStream);
                 });
             });
         };
 
+        const joinRoom = async (myId) => {
+            // Person B: Initialize MediaPipe
+            segmentor = new SelfieSegmentation({
+                locateFile: (file) =>
+                    `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
+            });
+            segmentor.setOptions({ modelSelection: 1 });
+            await segmentor.initialize();
+
+            const segCanvas = segmentationCanvasRef.current;
+            const segCtx = segCanvas.getContext("2d");
+
+            segmentor.onResults((results) => {
+                segCtx.clearRect(0, 0, segCanvas.width, segCanvas.height);
+                segCtx.save();
+                segCtx.drawImage(results.segmentationMask, 0, 0, segCanvas.width, segCanvas.height);
+                segCtx.globalCompositeOperation = "source-in";
+                segCtx.drawImage(localVideoRef.current, 0, 0, segCanvas.width, segCanvas.height);
+                segCtx.restore();
+            });
+
+            const processFrame = async () => {
+                await segmentor.send({ image: localVideoRef.current });
+                animationFrame = requestAnimationFrame(processFrame);
+            };
+
+            processFrame();
+
+            const processedStream = segCanvas.captureStream(30);
+            const call = peer.call(roomId, processedStream);
+
+            // Listen for final stream from A
+            call.on("stream", (finalStream) => {
+                finalVideoRef.current.srcObject = finalStream;
+                finalVideoRef.current.play();
+            });
+        };
+
         const startCompositing = (aStream, bStream) => {
-            const canvas = outputCanvasRef.current;
+            const canvas = compositeCanvasRef.current;
             const ctx = canvas.getContext("2d");
 
             const aVideo = document.createElement("video");
             aVideo.srcObject = aStream;
-            aVideo.muted = true;
             aVideo.play();
 
             const bVideo = document.createElement("video");
             bVideo.srcObject = bStream;
-            bVideo.muted = true;
             bVideo.play();
 
             const draw = () => {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
-                ctx.drawImage(aVideo, 0, 0, canvas.width, canvas.height); // Person A
-                ctx.drawImage(bVideo, 0, 0, canvas.width, canvas.height); // Person B (background removed)
-                animationFrameId = requestAnimationFrame(draw);
+                ctx.drawImage(aVideo, 0, 0, canvas.width, canvas.height);
+                ctx.drawImage(bVideo, 0, 0, canvas.width, canvas.height);
+                animationFrame = requestAnimationFrame(draw);
             };
-            draw();
 
-            const compositedStream = canvas.captureStream(30);
-            const callBack = peer.call(peerId, compositedStream); // Send final result back to B
+            draw();
         };
 
-        start();
+        setup();
 
         return () => {
-            if (animationFrameId) cancelAnimationFrame(animationFrameId);
-            if (localStream) localStream.getTracks().forEach((track) => track.stop());
+            cancelAnimationFrame(animationFrame);
             if (peer) peer.destroy();
+            if (localStream) localStream.getTracks().forEach((track) => track.stop());
         };
     }, [roomId]);
 
+    const isPersonA = !roomId;
+
     return (
         <div className="p-6 space-y-4 text-center">
-            <h2 className="text-xl font-bold">
-                {isRoomCreator ? "Person A (Room Creator)" : "Person B (Joiner)"}
-            </h2>
+            <h2 className="text-xl font-bold">{isPersonA ? "Person A (Room Creator)" : "Person B (Joiner)"}</h2>
 
-            {isRoomCreator && peerId && (
+            {isPersonA && peerId && (
                 <div className="p-2 bg-blue-100 rounded">
                     Share this link:{" "}
                     <code className="bg-white p-1 rounded">
@@ -133,33 +138,18 @@ export default function Room() {
             )}
 
             <div className="flex justify-center space-x-4">
-                {isRoomCreator ? (
-                    <canvas
-                        ref={outputCanvasRef}
-                        width={640}
-                        height={480}
-                        className="border-2"
-                    />
+                {isPersonA ? (
+                    <canvas ref={compositeCanvasRef} width={640} height={480} className="border" />
                 ) : (
-                    <video
-                        ref={displayVideoRef}
-                        width={640}
-                        height={480}
-                        autoPlay
-                        playsInline
-                        className="border-2"
-                    />
+                    <video ref={finalVideoRef} autoPlay playsInline width={640} height={480} className="border" />
                 )}
             </div>
 
+            {/* Hidden working elements */}
             <div className="hidden">
                 <video ref={localVideoRef} muted playsInline />
                 <video ref={remoteVideoRef} playsInline />
-                <canvas
-                    ref={segmentationCanvasRef}
-                    width={640}
-                    height={480}
-                />
+                <canvas ref={segmentationCanvasRef} width={640} height={480} />
             </div>
         </div>
     );
