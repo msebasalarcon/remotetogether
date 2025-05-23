@@ -1,4 +1,3 @@
-// RoomB.jsx
 import { SelfieSegmentation } from "@mediapipe/selfie_segmentation";
 import Peer from "peerjs";
 import { useEffect, useRef, useState } from "react";
@@ -23,10 +22,16 @@ export default function RoomB() {
     let animationFrame;
 
     useEffect(() => {
-        // Initialize canvas with proper dimensions
         const canvas = segmentationCanvasRef.current;
         canvas.width = 640;
         canvas.height = 480;
+        canvas.style.width = "640px";
+        canvas.style.height = "480px";
+
+        const processCanvas = document.createElement('canvas');
+        processCanvas.width = 640;
+        processCanvas.height = 480;
+        const processCtx = processCanvas.getContext('2d', { alpha: true });
 
         const initializeConnection = async () => {
             try {
@@ -42,59 +47,60 @@ export default function RoomB() {
                 peer.current.on("open", async () => {
                     connectionActive.current = true;
                     try {
-                        const stream = await navigator.mediaDevices.getUserMedia({ 
-                            video: { 
+                        const stream = await navigator.mediaDevices.getUserMedia({
+                            video: {
                                 width: 640,
                                 height: 480,
-                                aspectRatio: 4/3
-                            } 
+                                aspectRatio: 4 / 3
+                            }
                         });
 
                         if (!connectionActive.current) return;
 
                         localVideoRef.current.srcObject = stream;
                         await localVideoRef.current.play();
-                        
-                        // Initialize segmentation after video is ready
+
+                        // Initialize segmentation
                         segmentor.current = new SelfieSegmentation({
                             locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
                         });
-                        
-                        segmentor.current.setOptions({ 
-                            modelSelection: 1,
-                            selfieMode: true
+
+                        segmentor.current.setOptions({
+                            modelSelection: 0, // higher quality for upper body
+                            selfieMode: true,
+                            smoothSegmentation: true // smooths the mask
                         });
-                        
+
                         segmentor.current.onResults(results => {
                             if (!results.segmentationMask || !connectionActive.current) return;
-                            
-                            const ctx = canvas.getContext("2d");
-                            ctx.save();
-                            
-                            // Clear previous frame
-                            ctx.clearRect(0, 0, canvas.width, canvas.height);
-                            
-                            // Draw the segmentation mask
-                            ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
-                            
-                            // Only keep the foreground
-                            ctx.globalCompositeOperation = "source-in";
-                            ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-                            
-                            ctx.restore();
+
+                            processCtx.clearRect(0, 0, 640, 480);
+                            processCtx.globalCompositeOperation = 'copy';
+                            processCtx.drawImage(results.segmentationMask, 0, 0, 640, 480);
+                            processCtx.globalCompositeOperation = 'source-in';
+                            processCtx.drawImage(results.image, 0, 0, 640, 480);
+
+                            const ctx = canvas.getContext('2d', { alpha: true });
+
+                            // Enforce full transparency first
+                            ctx.globalCompositeOperation = 'copy';
+                            ctx.fillStyle = 'rgba(0,0,0,0)';
+                            ctx.fillRect(0, 0, 640, 480);
+
+                            // Draw processed result
+                            ctx.globalCompositeOperation = 'source-over';
+                            ctx.drawImage(processCanvas, 0, 0);
                         });
 
                         await segmentor.current.initialize();
-                        
-                        if (!connectionActive.current) return;
 
                         const process = async () => {
                             if (!connectionActive.current) return;
-                            
+
                             if (localVideoRef.current?.readyState === 4) {
                                 try {
-                                    await segmentor.current.send({ 
-                                        image: localVideoRef.current 
+                                    await segmentor.current.send({
+                                        image: localVideoRef.current
                                     });
                                 } catch (err) {
                                     console.error("Error processing frame:", err);
@@ -106,7 +112,7 @@ export default function RoomB() {
                         };
                         process();
 
-                        // Call peer with segmented video stream
+                        // Call peer with the segmented canvas stream
                         if (connectionActive.current) {
                             const call = peer.current.call(roomId, canvas.captureStream(30));
                             call.on("stream", compositeStream => {
@@ -145,7 +151,6 @@ export default function RoomB() {
                 peer.current.on("disconnected", () => {
                     console.log("Peer disconnected");
                     connectionActive.current = false;
-                    // Try to reconnect
                     peer.current?.reconnect();
                 });
 
@@ -163,9 +168,7 @@ export default function RoomB() {
 
         return () => {
             connectionActive.current = false;
-            if (peer.current) {
-                peer.current.destroy();
-            }
+            if (peer.current) peer.current.destroy();
             if (localVideoRef.current?.srcObject) {
                 localVideoRef.current.srcObject.getTracks().forEach(track => track.stop());
             }
@@ -185,29 +188,30 @@ export default function RoomB() {
             <div className="flex justify-center gap-4">
                 <div className="w-1/2">
                     <h3 className="text-lg font-semibold mb-2">Composite View</h3>
-                    <video 
-                        ref={finalVideoRef} 
-                        autoPlay 
-                        playsInline 
-                        width={640} 
-                        height={480} 
-                        className="border" 
+                    <video
+                        ref={finalVideoRef}
+                        autoPlay
+                        playsInline
+                        width={640}
+                        height={480}
+                        className="border"
                     />
                 </div>
             </div>
-            <video 
-                ref={localVideoRef} 
-                muted 
-                playsInline 
-                width={640} 
+            <video
+                ref={localVideoRef}
+                muted
+                playsInline
+                width={640}
                 height={480}
-                className="hidden" 
+                className="hidden"
             />
-            <canvas 
-                ref={segmentationCanvasRef} 
-                width={640} 
-                height={480} 
-                className="hidden" 
+            <canvas
+                ref={segmentationCanvasRef}
+                width={640}
+                height={480}
+                className="hidden"
+                style={{ backgroundColor: 'transparent' }}
             />
         </div>
     );

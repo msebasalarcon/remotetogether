@@ -120,7 +120,12 @@ export default function RoomA() {
         if (!connectionActive.current) return;
 
         const canvas = compositeCanvasRef.current;
-        const ctx = canvas.getContext("2d");
+        canvas.style.backgroundColor = 'transparent';
+        
+        // Create context with alpha channel support
+        const ctx = canvas.getContext("2d", {
+            alpha: true
+        });
 
         const aVideo = document.createElement("video");
         aVideo.srcObject = aStream;
@@ -135,20 +140,16 @@ export default function RoomA() {
             const draw = () => {
                 if (!connectionActive.current) return;
 
-                ctx.save();
-                
-                // Clear previous frame
+                // Clear with transparency
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 
-                // Draw person A's video (full frame)
-                ctx.globalAlpha = 1.0;
+                // Draw person A's video first
+                ctx.globalCompositeOperation = 'source-over';
                 ctx.drawImage(aVideo, 0, 0, canvas.width, canvas.height);
                 
-                // Draw person B's video (already has transparent background)
-                ctx.globalCompositeOperation = "source-over";
+                // Draw person B's video with transparency
+                ctx.globalCompositeOperation = 'source-over';
                 ctx.drawImage(bVideo, 0, 0, canvas.width, canvas.height);
-                
-                ctx.restore();
                 
                 if (connectionActive.current) {
                     animationFrame = requestAnimationFrame(draw);
@@ -210,6 +211,7 @@ export default function RoomA() {
                         width={640} 
                         height={480} 
                         className="border"
+                        style={{ backgroundColor: 'transparent' }}
                     />
                 </div>
             </div>
@@ -218,6 +220,7 @@ export default function RoomA() {
                 width={640} 
                 height={480} 
                 className="hidden"
+                style={{ backgroundColor: 'transparent' }}
             />
         </div>
     );
