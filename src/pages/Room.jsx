@@ -20,7 +20,7 @@ export default function Room() {
     const displayCanvasRef = useRef(null);
 
     useEffect(() => {
-        let peer, localStream, canvasStream, compositeStream, conn, segmentor;
+        let peer, localStream, canvasStream, compositeStream, segmentor;
         let animationFrameId;
 
         const start = async () => {
@@ -33,6 +33,7 @@ export default function Room() {
             peer.on("open", (id) => {
                 setPeerId(id);
                 if (isRoomCreator) return;
+
                 // Join as Person B
                 const callInterval = setInterval(() => {
                     if (canvasStream) {
@@ -85,7 +86,7 @@ export default function Room() {
                 };
                 process();
 
-                canvasStream = segCanvas.captureStream(30);
+                canvasStream = segmentationCanvasRef.current.captureStream(30);
             }
         };
 
@@ -100,17 +101,25 @@ export default function Room() {
 
             const bVideo = document.createElement("video");
             bVideo.srcObject = bStream;
+            bVideo.muted = true;
             bVideo.play();
 
             const draw = () => {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
-                ctx.drawImage(aVideo, 0, 0, canvas.width / 2, canvas.height);
-                ctx.drawImage(bVideo, canvas.width / 2, 0, canvas.width / 2, canvas.height);
+
+                // Draw Person A (background intact)
+                ctx.globalAlpha = 1.0;
+                ctx.drawImage(aVideo, 0, 0, canvas.width, canvas.height);
+
+                // Overlay Person B (transparent background from segmentation)
+                ctx.globalAlpha = 1.0;
+                ctx.drawImage(bVideo, 0, 0, canvas.width, canvas.height);
+
                 animationFrameId = requestAnimationFrame(draw);
             };
             draw();
 
-            // Send canvas back to Person B
+            // Send the final composite stream back to Person B
             compositeStream = canvas.captureStream(30);
             const call = peer.call(peerId, compositeStream);
         };
