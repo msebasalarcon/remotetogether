@@ -83,16 +83,37 @@ export default function RoomA() {
     };
 
     return (
-        <div className="p-6 text-center">
-            <h2 className="text-xl font-bold">Person A (Room Creator)</h2>
+        <div className="p-6">
+            <h2 className="text-xl font-bold mb-4">Person A (Room Creator)</h2>
             {peerId && (
-                <div className="p-2 bg-blue-100 rounded">
+                <div className="p-2 bg-blue-100 rounded mb-4">
                     Share this link: <code>{`${window.location.origin}/room/${peerId}`}</code>
                 </div>
             )}
-            <canvas ref={compositeCanvasRef} width={640} height={480} className="border" />
-            <video ref={localVideoRef} className="hidden" />
-            <video ref={remoteVideoRef} className="hidden" />
+            <div className="flex gap-4">
+                <div className="w-1/2">
+                    <h3 className="text-lg font-semibold mb-2">Person A (Original)</h3>
+                    <video 
+                        ref={localVideoRef} 
+                        autoPlay 
+                        playsInline 
+                        width={320} 
+                        height={240} 
+                        className="border"
+                    />
+                </div>
+                <div className="w-1/2">
+                    <h3 className="text-lg font-semibold mb-2">Person B (No Background)</h3>
+                    <video 
+                        ref={remoteVideoRef} 
+                        autoPlay 
+                        playsInline 
+                        width={320} 
+                        height={240} 
+                        className="border"
+                    />
+                </div>
+            </div>
         </div>
     );
 }
