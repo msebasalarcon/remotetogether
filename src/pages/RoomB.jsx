@@ -74,9 +74,23 @@ export default function RoomB() {
                         segmentor.current.onResults(results => {
                             if (!results.segmentationMask || !connectionActive.current) return;
 
+                            // Create an alpha mask from the segmentation
                             processCtx.clearRect(0, 0, 640, 480);
                             processCtx.globalCompositeOperation = 'copy';
                             processCtx.drawImage(results.segmentationMask, 0, 0, 640, 480);
+                            
+                            // Convert mask to alpha channel
+                            const imageData = processCtx.getImageData(0, 0, 640, 480);
+                            for (let i = 0; i < imageData.data.length; i += 4) {
+                                const maskValue = imageData.data[i]; // Red channel contains mask value
+                                imageData.data[i + 3] = maskValue; // Copy to alpha channel
+                                imageData.data[i] = 255; // Set RGB to white
+                                imageData.data[i + 1] = 255;
+                                imageData.data[i + 2] = 255;
+                            }
+                            processCtx.putImageData(imageData, 0, 0);
+                            
+                            // Apply mask to original image
                             processCtx.globalCompositeOperation = 'source-in';
                             processCtx.drawImage(results.image, 0, 0, 640, 480);
 

@@ -115,9 +115,15 @@ export default function RoomA() {
         const draw = () => {
             if (!connectionActive.current) return;
             ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw Person A first - this will be our background
             ctx.globalCompositeOperation = 'source-over';
             ctx.drawImage(aVideo, 0, 0, canvas.width, canvas.height);
+            
+            // Draw Person B with proper alpha blending
+            ctx.globalCompositeOperation = 'source-over';
             ctx.drawImage(bVideo, 0, 0, canvas.width, canvas.height);
+            
             animationFrame = requestAnimationFrame(draw);
         };
 
