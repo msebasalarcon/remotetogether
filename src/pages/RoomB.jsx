@@ -13,219 +13,296 @@ console.log = (...args) => {
 export default function RoomB() {
     const { roomId } = useParams();
     const [error, setError] = useState(null);
+    const [isProcessing, setIsProcessing] = useState(false);
     const localVideoRef = useRef(null);
+    const processedVideoRef = useRef(null);
     const segmentationCanvasRef = useRef(null);
-    const finalVideoRef = useRef(null);
     const peer = useRef(null);
     const segmentor = useRef(null);
-    const connectionActive = useRef(false);
-    let animationFrame;
+    const mediaStream = useRef(null);
+    let animationFrame = null;
 
     useEffect(() => {
-        const canvas = segmentationCanvasRef.current;
-        canvas.width = 640;
-        canvas.height = 480;
-        canvas.style.width = "640px";
-        canvas.style.height = "480px";
+        let isMounted = true;
 
-        const processCanvas = document.createElement('canvas');
-        processCanvas.width = 640;
-        processCanvas.height = 480;
-        const processCtx = processCanvas.getContext('2d', { alpha: true });
-
-        const initializeConnection = async () => {
+        async function initializeSegmentation() {
             try {
-                peer.current = new Peer({
-                    config: {
-                        iceServers: [
-                            { urls: 'stun:stun.l.google.com:19302' },
-                            { urls: 'stun:global.stun.twilio.com:3478' }
-                        ]
+                // Set up the segmentation canvas
+                const canvas = segmentationCanvasRef.current;
+                canvas.width = 640;
+                canvas.height = 480;
+
+                // Initialize MediaPipe Selfie Segmentation
+                segmentor.current = new SelfieSegmentation({
+                    locateFile: (file) => 
+                        `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`
+                });
+
+                // Configure segmentation
+                await segmentor.current.setOptions({
+                    modelSelection: 1, // 1 for better quality
+                    selfieMode: true,
+                });
+
+                // Get camera stream
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        width: 640,
+                        height: 480,
+                        aspectRatio: 4/3,
+                        frameRate: 30
                     }
                 });
 
-                peer.current.on("open", async () => {
-                    connectionActive.current = true;
-                    try {
-                        const stream = await navigator.mediaDevices.getUserMedia({
-                            video: {
-                                width: 640,
-                                height: 480,
-                                aspectRatio: 4 / 3
-                            }
-                        });
+                if (!isMounted) {
+                    stream.getTracks().forEach(track => track.stop());
+                    return;
+                }
 
-                        if (!connectionActive.current) return;
-
-                        localVideoRef.current.srcObject = stream;
-                        await localVideoRef.current.play();
-
-                        // Initialize segmentation
-                        segmentor.current = new SelfieSegmentation({
-                            locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
-                        });
-
-                        segmentor.current.setOptions({
-                            modelSelection: 0, // higher quality for upper body
-                            selfieMode: true,
-                            smoothSegmentation: true // smooths the mask
-                        });
-
-                        segmentor.current.onResults(results => {
-                            if (!results.segmentationMask || !connectionActive.current) return;
-
-                            // Create an alpha mask from the segmentation
-                            processCtx.clearRect(0, 0, 640, 480);
-                            processCtx.globalCompositeOperation = 'copy';
-                            processCtx.drawImage(results.segmentationMask, 0, 0, 640, 480);
-                            
-                            // Convert mask to alpha channel
-                            const imageData = processCtx.getImageData(0, 0, 640, 480);
-                            for (let i = 0; i < imageData.data.length; i += 4) {
-                                const maskValue = imageData.data[i]; // Red channel contains mask value
-                                imageData.data[i + 3] = maskValue; // Copy to alpha channel
-                                imageData.data[i] = 255; // Set RGB to white
-                                imageData.data[i + 1] = 255;
-                                imageData.data[i + 2] = 255;
-                            }
-                            processCtx.putImageData(imageData, 0, 0);
-                            
-                            // Apply mask to original image
-                            processCtx.globalCompositeOperation = 'source-in';
-                            processCtx.drawImage(results.image, 0, 0, 640, 480);
-
-                            const ctx = canvas.getContext('2d', { alpha: true });
-
-                            // Enforce full transparency first
-                            ctx.globalCompositeOperation = 'copy';
-                            ctx.fillStyle = 'rgba(0,0,0,0)';
-                            ctx.fillRect(0, 0, 640, 480);
-
-                            // Draw processed result
-                            ctx.globalCompositeOperation = 'source-over';
-                            ctx.drawImage(processCanvas, 0, 0);
-                        });
-
-                        await segmentor.current.initialize();
-
-                        const process = async () => {
-                            if (!connectionActive.current) return;
-
-                            if (localVideoRef.current?.readyState === 4) {
-                                try {
-                                    await segmentor.current.send({
-                                        image: localVideoRef.current
-                                    });
-                                } catch (err) {
-                                    console.error("Error processing frame:", err);
-                                }
-                            }
-                            if (connectionActive.current) {
-                                animationFrame = requestAnimationFrame(process);
-                            }
+                mediaStream.current = stream;
+                
+                // Set up video element
+                if (localVideoRef.current) {
+                    localVideoRef.current.srcObject = stream;
+                    // Wait for video to be ready
+                    await new Promise((resolve) => {
+                        const videoElement = localVideoRef.current;
+                        videoElement.onloadedmetadata = () => {
+                            videoElement.oncanplay = resolve;
                         };
-                        process();
-
-                        // Call peer with the segmented canvas stream
-                        if (connectionActive.current) {
-                            const call = peer.current.call(roomId, canvas.captureStream(30));
-                            call.on("stream", compositeStream => {
-                                if (finalVideoRef.current && connectionActive.current) {
-                                    finalVideoRef.current.srcObject = compositeStream;
-                                    finalVideoRef.current.play().catch(err => {
-                                        console.error("Error playing composite stream:", err);
-                                        setError("Error playing composite stream: " + err.message);
-                                    });
-                                }
-                            });
-
-                            call.on("error", err => {
-                                console.error("Call error:", err);
-                                setError("Call error: " + err.message);
-                            });
-
-                            call.on("close", () => {
-                                console.log("Call closed");
-                                connectionActive.current = false;
-                            });
-                        }
-                    } catch (err) {
-                        console.error("Error setting up media:", err);
-                        setError("Error setting up media: " + err.message);
-                        connectionActive.current = false;
+                    });
+                    
+                    // Ensure video playback starts
+                    try {
+                        await localVideoRef.current.play();
+                    } catch (playError) {
+                        console.warn('Video play failed, retrying:', playError);
+                        // Add a small delay and try again
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                        await localVideoRef.current.play();
                     }
-                });
+                }
 
-                peer.current.on("error", err => {
-                    console.error("Peer error:", err);
-                    setError("Connection error: " + err.message);
-                    connectionActive.current = false;
-                });
+                // Process frames
+                segmentor.current.onResults(processResults);
 
-                peer.current.on("disconnected", () => {
-                    console.log("Peer disconnected");
-                    connectionActive.current = false;
-                    peer.current?.reconnect();
-                });
+                // Start the segmentation loop
+                await startSegmentation();
+                if (isMounted) {
+                    setIsProcessing(true);
+                }
+
+                // Initialize PeerJS connection
+                initializePeerConnection();
 
             } catch (err) {
                 console.error("Initialization error:", err);
-                setError("Initialization error: " + err.message);
-                connectionActive.current = false;
+                if (isMounted) {
+                    setError("Failed to initialize: " + err.message);
+                    // Clean up on error
+                    if (mediaStream.current) {
+                        mediaStream.current.getTracks().forEach(track => track.stop());
+                    }
+                }
             }
-        };
+        }
 
-        initializeConnection().catch(err => {
-            console.error("Failed to initialize:", err);
-            setError("Failed to initialize: " + err.message);
-        });
+        initializeSegmentation();
 
         return () => {
-            connectionActive.current = false;
-            if (peer.current) peer.current.destroy();
-            if (localVideoRef.current?.srcObject) {
-                localVideoRef.current.srcObject.getTracks().forEach(track => track.stop());
+            isMounted = false;
+            if (mediaStream.current) {
+                mediaStream.current.getTracks().forEach(track => track.stop());
             }
-            cancelAnimationFrame(animationFrame);
-            segmentor.current?.close();
+            if (peer.current) {
+                peer.current.destroy();
+            }
+            if (animationFrame) {
+                cancelAnimationFrame(animationFrame);
+            }
+            if (segmentor.current) {
+                segmentor.current.close();
+            }
         };
     }, [roomId]);
 
+    const processResults = (results) => {
+        if (!results.segmentationMask || !results.image) {
+            console.warn('No segmentation results available');
+            return;
+        }
+
+        const canvas = segmentationCanvasRef.current;
+        if (!canvas) {
+            console.warn('Canvas not available');
+            return;
+        }
+
+        const ctx = canvas.getContext('2d', {
+            alpha: true,
+            willReadFrequently: true,
+            desynchronized: true
+        });
+
+        // Clear the canvas
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Draw the segmentation mask
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
+
+        // Use the mask to clip the original image
+        ctx.globalCompositeOperation = 'source-in';
+        ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+        // Create a stream from the canvas and display it locally
+        try {
+            const processedStream = canvas.captureStream(30);
+            if (processedVideoRef.current) {
+                if (!processedVideoRef.current.srcObject) {
+                    processedVideoRef.current.srcObject = processedStream;
+                    processedVideoRef.current.play().catch(err => {
+                        console.error('Error playing processed video:', err);
+                    });
+                }
+            }
+
+            // Send to peer if connected
+            if (peer.current && roomId) {
+                sendStreamToPeer(processedStream);
+            }
+        } catch (err) {
+            console.error('Error handling processed stream:', err);
+        }
+    };
+
+    const startSegmentation = async () => {
+        if (!localVideoRef.current || !segmentor.current) {
+            console.warn('Video or segmentor not ready');
+            return;
+        }
+
+        try {
+            await segmentor.current.send({ image: localVideoRef.current });
+        } catch (err) {
+            console.error("Error in segmentation:", err);
+        }
+
+        animationFrame = requestAnimationFrame(startSegmentation);
+    };
+
+    const initializePeerConnection = () => {
+        peer.current = new Peer({
+            config: {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:global.stun.twilio.com:3478' }
+                ]
+            }
+        });
+
+        peer.current.on('open', () => {
+            console.log('Connected to signaling server');
+        });
+
+        peer.current.on('error', (err) => {
+            console.error('PeerJS error:', err);
+            setError('Connection error: ' + err.message);
+        });
+    };
+
+    const sendStreamToPeer = (processedStream) => {
+        if (!roomId || !peer.current) {
+            console.warn('Room ID or peer not available');
+            return;
+        }
+
+        try {
+            // Check if we already have an active call
+            const existingCall = peer.current.connections[roomId]?.[0];
+            if (existingCall) {
+                // Update the stream of the existing call
+                const senders = existingCall.peerConnection.getSenders();
+                const videoSender = senders.find(sender => sender.track?.kind === 'video');
+                if (videoSender) {
+                    const track = processedStream.getVideoTracks()[0];
+                    videoSender.replaceTrack(track).catch(console.error);
+                }
+            } else {
+                // Create a new call
+                const call = peer.current.call(roomId, processedStream);
+                
+                call.on('stream', (remoteStream) => {
+                    if (processedVideoRef.current) {
+                        processedVideoRef.current.srcObject = remoteStream;
+                        processedVideoRef.current.play().catch(console.error);
+                    }
+                });
+
+                call.on('error', (err) => {
+                    console.error('Call error:', err);
+                    setError('Call error: ' + err.message);
+                });
+            }
+        } catch (err) {
+            console.error('Error establishing call:', err);
+            setError('Call error: ' + err.message);
+        }
+    };
+
     return (
-        <div className="p-6 text-center">
-            <h2 className="text-xl font-bold mb-4">Person B (Joiner)</h2>
+        <div className="p-6 bg-gray-100 min-h-screen">
+            <h2 className="text-2xl font-bold mb-6">Person B (Background Removed)</h2>
+            
             {error && (
-                <div className="p-2 mb-4 bg-red-100 text-red-700 rounded">
+                <div className="mb-4 p-4 bg-red-100 text-red-700 rounded-lg">
                     {error}
                 </div>
             )}
-            <div className="flex justify-center gap-4">
-                <div className="w-1/2">
-                    <h3 className="text-lg font-semibold mb-2">Composite View</h3>
-                    <video
-                        ref={finalVideoRef}
-                        autoPlay
-                        playsInline
-                        width={640}
-                        height={480}
-                        className="border"
-                    />
+
+            <div className="grid grid-cols-2 gap-6">
+                <div>
+                    <h3 className="text-lg font-semibold mb-2">Your Camera</h3>
+                    <div className="relative">
+                        <video
+                            ref={localVideoRef}
+                            className="w-full rounded-lg shadow-lg"
+                            playsInline
+                            muted
+                            autoPlay
+                        />
+                        {!isProcessing && (
+                            <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white">
+                                Initializing camera...
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                <div>
+                    <h3 className="text-lg font-semibold mb-2">Processed View (Background Removed)</h3>
+                    <div className="relative">
+                        <video
+                            ref={processedVideoRef}
+                            className="w-full rounded-lg shadow-lg"
+                            playsInline
+                            autoPlay
+                        />
+                        {!isProcessing && (
+                            <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white">
+                                Processing video...
+                            </div>
+                        )}
+                    </div>
                 </div>
             </div>
-            <video
-                ref={localVideoRef}
-                muted
-                playsInline
-                width={640}
-                height={480}
-                className="hidden"
-            />
+
+            {/* Hidden canvas for segmentation */}
             <canvas
                 ref={segmentationCanvasRef}
+                className="hidden"
                 width={640}
                 height={480}
-                className="hidden"
-                style={{ backgroundColor: 'transparent' }}
             />
         </div>
     );
