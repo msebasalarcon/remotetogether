@@ -18,7 +18,8 @@ export default defineConfig({
     headers: {
       'Cross-Origin-Embedder-Policy': 'require-corp',
       'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Resource-Policy': 'cross-origin'
+      'Cross-Origin-Resource-Policy': 'cross-origin',
+      'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline' https://cdn.jsdelivr.net https://*.mediapipe.dev; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://storage.googleapis.com https://*.storage.googleapis.com https://*.mediapipe.dev; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net https://*.peerjs.com wss://*.peerjs.com https://stun.l.google.com https://global.stun.twilio.com ws://localhost:* wss://localhost:* https://storage.googleapis.com/tfjs-models/ https://tfjs-models.storage.googleapis.com https://*.mediapipe.dev;"
     }
   },
   build: {

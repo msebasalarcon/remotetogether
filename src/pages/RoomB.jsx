@@ -21,6 +21,11 @@ export default function RoomB() {
     const segmentor = useRef(null);
     const mediaStream = useRef(null);
     let animationFrame = null;
+    const [streamStatus, setStreamStatus] = useState({
+        localStream: { ready: false, error: null },
+        processedStream: { ready: false, error: null },
+        peerConnection: { state: 'disconnected', error: null }
+    });
 
     useEffect(() => {
         let isMounted = true;
@@ -68,6 +73,11 @@ export default function RoomB() {
                     await new Promise((resolve) => {
                         const videoElement = localVideoRef.current;
                         videoElement.onloadedmetadata = () => {
+                            console.log('Local video metadata loaded');
+                            setStreamStatus(prev => ({
+                                ...prev,
+                                localStream: { ready: true, error: null }
+                            }));
                             videoElement.oncanplay = resolve;
                         };
                     });
@@ -75,6 +85,7 @@ export default function RoomB() {
                     // Ensure video playback starts
                     try {
                         await localVideoRef.current.play();
+                        console.log('Local video playback started');
                     } catch (playError) {
                         console.warn('Video play failed, retrying:', playError);
                         // Add a small delay and try again
@@ -99,6 +110,10 @@ export default function RoomB() {
                 console.error("Initialization error:", err);
                 if (isMounted) {
                     setError("Failed to initialize: " + err.message);
+                    setStreamStatus(prev => ({
+                        ...prev,
+                        localStream: { ready: false, error: err.message }
+                    }));
                     // Clean up on error
                     if (mediaStream.current) {
                         mediaStream.current.getTracks().forEach(track => track.stop());
@@ -129,12 +144,20 @@ export default function RoomB() {
     const processResults = (results) => {
         if (!results.segmentationMask || !results.image) {
             console.warn('No segmentation results available');
+            setStreamStatus(prev => ({
+                ...prev,
+                processedStream: { ready: false, error: 'No segmentation results' }
+            }));
             return;
         }
 
         const canvas = segmentationCanvasRef.current;
         if (!canvas) {
             console.warn('Canvas not available');
+            setStreamStatus(prev => ({
+                ...prev,
+                processedStream: { ready: false, error: 'Canvas not available' }
+            }));
             return;
         }
 
@@ -144,25 +167,36 @@ export default function RoomB() {
             desynchronized: true
         });
 
-        // Clear the canvas
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        // Draw the segmentation mask
-        ctx.globalCompositeOperation = 'source-over';
-        ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
-
-        // Use the mask to clip the original image
-        ctx.globalCompositeOperation = 'source-in';
-        ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-
-        // Create a stream from the canvas and display it locally
         try {
+            // Clear the canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw the segmentation mask
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
+
+            // Use the mask to clip the original image
+            ctx.globalCompositeOperation = 'source-in';
+            ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+            // Create a stream from the canvas and display it locally
             const processedStream = canvas.captureStream(30);
+            
+            // Update processed stream status
+            setStreamStatus(prev => ({
+                ...prev,
+                processedStream: { ready: true, error: null }
+            }));
+
             if (processedVideoRef.current) {
                 if (!processedVideoRef.current.srcObject) {
                     processedVideoRef.current.srcObject = processedStream;
                     processedVideoRef.current.play().catch(err => {
                         console.error('Error playing processed video:', err);
+                        setStreamStatus(prev => ({
+                            ...prev,
+                            processedStream: { ready: false, error: err.message }
+                        }));
                     });
                 }
             }
@@ -173,6 +207,10 @@ export default function RoomB() {
             }
         } catch (err) {
             console.error('Error handling processed stream:', err);
+            setStreamStatus(prev => ({
+                ...prev,
+                processedStream: { ready: false, error: err.message }
+            }));
         }
     };
 
@@ -192,28 +230,138 @@ export default function RoomB() {
     };
 
     const initializePeerConnection = () => {
+        if (peer.current) {
+            peer.current.destroy();
+        }
+
         peer.current = new Peer({
             config: {
                 iceServers: [
                     { urls: 'stun:stun.l.google.com:19302' },
                     { urls: 'stun:global.stun.twilio.com:3478' }
                 ]
-            }
+            },
+            debug: 3 // Enable detailed debugging
         });
 
         peer.current.on('open', () => {
-            console.log('Connected to signaling server');
+            console.log('Connected to signaling server with ID:', peer.current.id);
+            setStreamStatus(prev => ({
+                ...prev,
+                peerConnection: { state: 'connected', error: null }
+            }));
+
+            // Immediately try to connect to Person A
+            if (roomId && mediaStream.current) {
+                console.log('Attempting to call Person A at room:', roomId);
+                // Get the processed stream from the canvas
+                const processedStream = segmentationCanvasRef.current.captureStream(30);
+                const call = peer.current.call(roomId, processedStream);
+                setupCallHandlers(call);
+            }
         });
 
         peer.current.on('error', (err) => {
             console.error('PeerJS error:', err);
             setError('Connection error: ' + err.message);
+            setStreamStatus(prev => ({
+                ...prev,
+                peerConnection: { state: 'error', error: err.message }
+            }));
         });
+
+        peer.current.on('disconnected', () => {
+            console.log('Disconnected from signaling server, attempting to reconnect...');
+            setStreamStatus(prev => ({
+                ...prev,
+                peerConnection: { state: 'disconnected', error: null }
+            }));
+            // Try to reconnect
+            peer.current.reconnect();
+        });
+
+        peer.current.on('close', () => {
+            console.log('Call closed, attempting to reconnect...');
+            // Try to reestablish the call
+            if (roomId && segmentationCanvasRef.current) {
+                const processedStream = segmentationCanvasRef.current.captureStream(30);
+                const newCall = peer.current.call(roomId, processedStream);
+                setupCallHandlers(newCall);
+            }
+        });
+    };
+
+    const setupCallHandlers = (call) => {
+        call.on('stream', (remoteStream) => {
+            console.log('Stream connection established with Person A');
+            setStreamStatus(prev => ({
+                ...prev,
+                peerConnection: { state: 'streaming', error: null }
+            }));
+        });
+
+        call.on('error', (err) => {
+            console.error('Call error:', err);
+            setError('Call error: ' + err.message);
+            setStreamStatus(prev => ({
+                ...prev,
+                peerConnection: { state: 'error', error: err.message }
+            }));
+        });
+
+        call.on('close', () => {
+            console.log('Call closed, attempting to reconnect...');
+            // Try to reestablish the call
+            if (roomId && segmentationCanvasRef.current) {
+                const processedStream = segmentationCanvasRef.current.captureStream(30);
+                const newCall = peer.current.call(roomId, processedStream);
+                setupCallHandlers(newCall);
+            }
+        });
+
+        // Monitor connection state
+        call.peerConnection.onconnectionstatechange = () => {
+            const state = call.peerConnection.connectionState;
+            console.log('PeerConnection state changed:', state);
+            setStreamStatus(prev => ({
+                ...prev,
+                peerConnection: { 
+                    state: state,
+                    error: null 
+                }
+            }));
+
+            // If connection fails, try to reconnect
+            if (state === 'failed' || state === 'disconnected') {
+                console.log('Connection lost, attempting to reconnect...');
+                if (roomId && segmentationCanvasRef.current) {
+                    const processedStream = segmentationCanvasRef.current.captureStream(30);
+                    const newCall = peer.current.call(roomId, processedStream);
+                    setupCallHandlers(newCall);
+                }
+            }
+        };
+
+        // Monitor ICE connection state
+        call.peerConnection.oniceconnectionstatechange = () => {
+            console.log('ICE connection state:', call.peerConnection.iceConnectionState);
+        };
+
+        // Log ICE candidates
+        call.peerConnection.onicecandidate = (event) => {
+            if (event.candidate) {
+                console.log('New ICE candidate:', event.candidate.candidate);
+            }
+        };
     };
 
     const sendStreamToPeer = (processedStream) => {
         if (!roomId || !peer.current) {
             console.warn('Room ID or peer not available');
+            setStreamStatus(prev => ({
+                ...prev,
+                peerConnection: { state: 'not ready', error: 'Room ID or peer not available' }
+            }));
             return;
         }
 
@@ -226,27 +374,27 @@ export default function RoomB() {
                 const videoSender = senders.find(sender => sender.track?.kind === 'video');
                 if (videoSender) {
                     const track = processedStream.getVideoTracks()[0];
-                    videoSender.replaceTrack(track).catch(console.error);
+                    videoSender.replaceTrack(track).catch(err => {
+                        console.error('Error replacing track:', err);
+                        setStreamStatus(prev => ({
+                            ...prev,
+                            peerConnection: { state: 'error', error: 'Failed to update stream: ' + err.message }
+                        }));
+                    });
                 }
             } else {
                 // Create a new call
+                console.log('Creating new call to Person A:', roomId);
                 const call = peer.current.call(roomId, processedStream);
-                
-                call.on('stream', (remoteStream) => {
-                    if (processedVideoRef.current) {
-                        processedVideoRef.current.srcObject = remoteStream;
-                        processedVideoRef.current.play().catch(console.error);
-                    }
-                });
-
-                call.on('error', (err) => {
-                    console.error('Call error:', err);
-                    setError('Call error: ' + err.message);
-                });
+                setupCallHandlers(call);
             }
         } catch (err) {
             console.error('Error establishing call:', err);
             setError('Call error: ' + err.message);
+            setStreamStatus(prev => ({
+                ...prev,
+                peerConnection: { state: 'error', error: err.message }
+            }));
         }
     };
 
@@ -293,6 +441,40 @@ export default function RoomB() {
                                 Processing video...
                             </div>
                         )}
+                    </div>
+                </div>
+            </div>
+
+            {/* Debug Status Panel */}
+            <div className="mt-6 p-4 bg-white rounded-lg shadow">
+                <h3 className="text-lg font-semibold mb-3">Debug Information</h3>
+                <div className="grid grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                        <h4 className="font-medium">Local Camera</h4>
+                        <div className={`text-sm ${streamStatus.localStream.error ? 'text-red-600' : 'text-gray-600'}`}>
+                            Status: {streamStatus.localStream.ready ? 'Ready' : 'Not Ready'}
+                            {streamStatus.localStream.error && (
+                                <div className="text-red-600">Error: {streamStatus.localStream.error}</div>
+                            )}
+                        </div>
+                    </div>
+                    <div className="space-y-2">
+                        <h4 className="font-medium">Processed Stream</h4>
+                        <div className={`text-sm ${streamStatus.processedStream.error ? 'text-red-600' : 'text-gray-600'}`}>
+                            Status: {streamStatus.processedStream.ready ? 'Ready' : 'Not Ready'}
+                            {streamStatus.processedStream.error && (
+                                <div className="text-red-600">Error: {streamStatus.processedStream.error}</div>
+                            )}
+                        </div>
+                    </div>
+                    <div className="space-y-2">
+                        <h4 className="font-medium">Peer Connection</h4>
+                        <div className={`text-sm ${streamStatus.peerConnection.error ? 'text-red-600' : 'text-gray-600'}`}>
+                            Status: {streamStatus.peerConnection.state}
+                            {streamStatus.peerConnection.error && (
+                                <div className="text-red-600">Error: {streamStatus.peerConnection.error}</div>
+                            )}
+                        </div>
                     </div>
                 </div>
             </div>
