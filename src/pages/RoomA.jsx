@@ -10,6 +10,7 @@ export default function RoomA() {
     const localVideoRef = useRef(null);
     const remoteVideoRef = useRef(null);
     const remoteCanvasRef = useRef(null);
+    const compositeCanvasRef = useRef(null);
     const peer = useRef(null);
     const animationFrameRef = useRef(null);
 
@@ -18,18 +19,11 @@ export default function RoomA() {
         const canvas = remoteCanvasRef.current;
         const video = remoteVideoRef.current;
 
-        if (!canvas || !video) return;
-
-        // Make sure video is actually playing and has valid dimensions
-        if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
-            animationFrameRef.current = requestAnimationFrame(renderRemoteVideo);
-            return;
-        }
+        if (!canvas || !video || video.readyState < 2) return;
 
         const ctx = canvas.getContext('2d', {
             alpha: true,
-            willReadFrequently: true,
-            desynchronized: true
+            willReadFrequently: true
         });
 
         // Clear the canvas with a transparent background
@@ -37,7 +31,6 @@ export default function RoomA() {
 
         try {
             // Draw the video frame
-            ctx.globalCompositeOperation = 'source-over';
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
             // Get the image data
@@ -45,7 +38,6 @@ export default function RoomA() {
             const data = imageData.data;
 
             // Convert black pixels to transparent
-            // This assumes the background is pure black (RGB: 0,0,0)
             for (let i = 0; i < data.length; i += 4) {
                 const r = data[i];
                 const g = data[i + 1];
@@ -64,8 +56,38 @@ export default function RoomA() {
             console.error('Error drawing video to canvas:', err);
         }
 
-        // Continue the render loop
-        animationFrameRef.current = requestAnimationFrame(renderRemoteVideo);
+        // Request next frame
+        requestAnimationFrame(renderRemoteVideo);
+    };
+
+    // Function to render the composite view
+    const renderComposite = () => {
+        const localVideo = localVideoRef.current;
+        const remoteCanvas = remoteCanvasRef.current;
+        const compositeCanvas = compositeCanvasRef.current;
+
+        if (!compositeCanvas || !localVideo || !remoteCanvas) {
+            animationFrameRef.current = requestAnimationFrame(renderComposite);
+            return;
+        }
+
+        const ctx = compositeCanvas.getContext('2d', {
+            alpha: true,
+            willReadFrequently: true
+        });
+
+        // Clear the canvas
+        ctx.clearRect(0, 0, compositeCanvas.width, compositeCanvas.height);
+
+        // Draw local video first (background)
+        if (localVideo.readyState >= 2) {
+            ctx.drawImage(localVideo, 0, 0, compositeCanvas.width, compositeCanvas.height);
+        }
+
+        // Draw remote canvas (with transparency) on top
+        ctx.drawImage(remoteCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
+
+        animationFrameRef.current = requestAnimationFrame(renderComposite);
     };
 
     useEffect(() => {
@@ -76,6 +98,14 @@ export default function RoomA() {
         }).then(stream => {
             // Show local video
             localVideoRef.current.srcObject = stream;
+
+            // Set up canvases
+            const remoteCanvas = remoteCanvasRef.current;
+            const compositeCanvas = compositeCanvasRef.current;
+            remoteCanvas.width = 640;
+            remoteCanvas.height = 480;
+            compositeCanvas.width = 640;
+            compositeCanvas.height = 480;
 
             // Initialize peer
             peer.current = new Peer({
@@ -107,12 +137,7 @@ export default function RoomA() {
                     const videoElement = remoteVideoRef.current;
                     if (!videoElement) return;
 
-                    // Set up canvas first
-                    const canvas = remoteCanvasRef.current;
-                    canvas.width = 640;
-                    canvas.height = 480;
-
-                    // Then set up video
+                    // Set up video
                     videoElement.srcObject = remoteStream;
                     videoElement.playsInline = true;
                     videoElement.autoplay = true;
@@ -121,8 +146,13 @@ export default function RoomA() {
                     videoElement.play().then(() => {
                         console.log('Remote video playing');
                         setIsConnected(true);
-                        // Start render loop only after play succeeds
+                        
+                        // Start both render loops
+                        if (animationFrameRef.current) {
+                            cancelAnimationFrame(animationFrameRef.current);
+                        }
                         renderRemoteVideo();
+                        renderComposite();
                     }).catch(err => {
                         console.error('Error playing remote video:', err);
                     });
@@ -133,7 +163,7 @@ export default function RoomA() {
                     const state = call.peerConnection.connectionState;
                     console.log('PeerConnection state:', state);
                     if (state === 'disconnected' || state === 'failed') {
-                        // Stop render loop on disconnect
+                        // Stop render loops on disconnect
                         if (animationFrameRef.current) {
                             cancelAnimationFrame(animationFrameRef.current);
                         }
@@ -176,7 +206,7 @@ export default function RoomA() {
                 </div>
             )}
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-3 gap-4">
                 <div>
                     <h2 className="text-lg font-semibold mb-2">Local Video</h2>
                     <video
@@ -208,6 +238,13 @@ export default function RoomA() {
                             backgroundSize: '20px 20px',
                             backgroundPosition: '0 0, 0 10px, 10px -10px, -10px 0px'
                         }}
+                    />
+                </div>
+                <div>
+                    <h2 className="text-lg font-semibold mb-2">Composite View</h2>
+                    <canvas
+                        ref={compositeCanvasRef}
+                        className="w-full rounded bg-black"
                     />
                 </div>
             </div>

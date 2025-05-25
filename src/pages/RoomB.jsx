@@ -45,8 +45,8 @@ export default function RoomB() {
 
                 // Configure segmentation
                 await segmentor.current.setOptions({
-                    modelSelection: 1, // 1 for better quality
-                    selfieMode: true,
+                    modelSelection: 1, // Use the higher quality model
+                    selfieMode: true
                 });
 
                 // Get camera stream
@@ -163,8 +163,7 @@ export default function RoomB() {
 
         const ctx = canvas.getContext('2d', {
             alpha: true,
-            willReadFrequently: true,
-            desynchronized: true
+            willReadFrequently: true
         });
 
         try {
@@ -172,12 +171,26 @@ export default function RoomB() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
             // Draw the segmentation mask
-            ctx.globalCompositeOperation = 'source-over';
+            ctx.save();
             ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
-
+            
+            // Get the mask data
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = imageData.data;
+            
+            // Process the mask to make it more binary with slight smoothing
+            for (let i = 0; i < data.length; i += 4) {
+                const alpha = data[i];
+                // Make the mask more decisive but keep some smoothing at the edges
+                data[i + 3] = alpha > 128 ? 255 : alpha < 64 ? 0 : alpha * 2;
+            }
+            
+            ctx.putImageData(imageData, 0, 0);
+            
             // Use the mask to clip the original image
             ctx.globalCompositeOperation = 'source-in';
             ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+            ctx.restore();
 
             // Create a stream from the canvas and display it locally
             const processedStream = canvas.captureStream(30);
