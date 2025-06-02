@@ -13,12 +13,14 @@
     "@mediapipe/camera_utils": "^0.3.1675466862",
     "@mediapipe/selfie_segmentation": "^0.1.1675465747",
     "@tensorflow-models/body-pix": "^2.2.1",
-    "@tensorflow/tfjs": "^4.15.0",
-    "@tensorflow/tfjs-backend-webgl": "^4.15.0",
+    "@tensorflow/tfjs": "^4.17.0",
+    "@tensorflow/tfjs-backend-webgl": "^4.17.0",
+    "@tensorflow/tfjs-backend-webgpu": "^4.17.0",
     "@tensorflow/tfjs-converter": "^4.15.0",
     "@tensorflow/tfjs-core": "^4.15.0",
     "gl-matrix": "^3.4.3",
     "lucide-react": "^0.511.0",
+    "onnxruntime-web": "^1.22.0",
     "peerjs": "^1.5.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
@@ -28,6 +30,7 @@
   "devDependencies": {
     "@eslint/js": "^9.25.0",
     "@tailwindcss/vite": "^4.1.7",
+    "@types/mime-types": "^3.0.0",
     "@types/react": "^19.1.2",
     "@types/react-dom": "^19.1.2",
     "@vitejs/plugin-react": "^4.4.1",
@@ -35,7 +38,9 @@
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.19",
     "globals": "^16.0.0",
+    "mime-types": "^3.0.1",
     "tailwindcss": "^4.1.7",
-    "vite": "^6.3.5"
+    "vite": "^6.3.5",
+    "vite-plugin-static-copy": "^3.0.0"
   }
 }
