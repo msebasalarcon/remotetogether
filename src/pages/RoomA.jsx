@@ -349,36 +349,54 @@ export default function RoomA() {
         ctx.clearRect(0, 0, compositeCanvas.width, compositeCanvas.height);
 
         try {
-            // Step 1: Create background by removing Person A from their video
+            // Step 1: Create clean background by properly masking out Person A
             if (localVideo.readyState >= 2 && localSegmentationCanvas) {
                 // Draw Person A's full video first
                 ctx.drawImage(localVideo, 0, 0, compositeCanvas.width, compositeCanvas.height);
                 
-                // Get the segmentation mask to remove Person A
-                const segCtx = localSegmentationCanvas.getContext('2d');
-                const segImageData = segCtx.getImageData(0, 0, localSegmentationCanvas.width, localSegmentationCanvas.height);
-                const compositeImageData = ctx.getImageData(0, 0, compositeCanvas.width, compositeCanvas.height);
+                // Create an inverted mask to remove Person A from background
+                ctx.save();
+                ctx.globalCompositeOperation = 'destination-out';
                 
-                // Remove Person A from background using inverse mask
+                // Get the segmentation canvas context
+                const segCtx = localSegmentationCanvas.getContext('2d');
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = localSegmentationCanvas.width;
+                tempCanvas.height = localSegmentationCanvas.height;
+                const tempCtx = tempCanvas.getContext('2d');
+                
+                // Create a mask from the segmentation alpha channel
+                const segImageData = segCtx.getImageData(0, 0, localSegmentationCanvas.width, localSegmentationCanvas.height);
+                const maskData = tempCtx.createImageData(segImageData.width, segImageData.height);
+                
+                // Convert segmentation alpha to a white mask (where Person A is)
                 for (let i = 0; i < segImageData.data.length; i += 4) {
                     const alpha = segImageData.data[i + 3];
-                    if (alpha > 50) { // Where Person A is present
-                        // Make these pixels transparent or blend with a neutral background
-                        const blendFactor = alpha / 255;
-                        compositeImageData.data[i] = compositeImageData.data[i] * (1 - blendFactor * 0.8);
-                        compositeImageData.data[i + 1] = compositeImageData.data[i + 1] * (1 - blendFactor * 0.8);
-                        compositeImageData.data[i + 2] = compositeImageData.data[i + 2] * (1 - blendFactor * 0.8);
+                    if (alpha > 100) { // Where Person A is detected
+                        maskData.data[i] = 255;     // R
+                        maskData.data[i + 1] = 255; // G  
+                        maskData.data[i + 2] = 255; // B
+                        maskData.data[i + 3] = 255; // A
+                    } else {
+                        maskData.data[i] = 0;       // R
+                        maskData.data[i + 1] = 0;   // G
+                        maskData.data[i + 2] = 0;   // B
+                        maskData.data[i + 3] = 0;   // A
                     }
                 }
                 
-                // Put the background-only image back
-                ctx.putImageData(compositeImageData, 0, 0);
+                tempCtx.putImageData(maskData, 0, 0);
+                
+                // Apply the mask to remove Person A from background
+                ctx.drawImage(tempCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
+                ctx.restore();
+                
             } else if (localVideo.readyState >= 2) {
                 // Fallback: just draw the full video if segmentation isn't ready
                 ctx.drawImage(localVideo, 0, 0, compositeCanvas.width, compositeCanvas.height);
             }
 
-            // Step 2: Determine depth order and composite segmented persons
+            // Step 2: Composite segmented persons in correct depth order
             const personAInFront = isPersonAInFront();
 
             if (personAInFront) {
