@@ -51,6 +51,15 @@ export default function RoomA() {
     const maxHistoryFrames = 2;
     let frameCount = 0;
 
+    // Add depth comparison state for more sensible switching
+    const depthState = useRef({
+        currentPersonAInFront: true,
+        lastSwitchFrame: 0,
+        stableFramesRequired: 15, // Require 15 frames of consistent difference before switching
+        consistentFrames: 0,
+        lastDecision: true
+    });
+
     // Initialize MediaPipe segmentation for Person A
     const initializeSegmentation = async () => {
         try {
@@ -265,29 +274,74 @@ export default function RoomA() {
         return newMeasurements;
     };
 
-    // Determine depth order based on face sizes
-    const isPersonAInFront = () => {
-        // Use the current state measurements for real-time accuracy
-        const personA = faceMeasurements.personA;
-        const personB = faceMeasurements.personB;
+    // Enhanced depth comparison with hysteresis and stability requirements
+    const determineDepthOrder = () => {
+        const currentPersonA = latestMeasurements.current.personA;
+        const currentPersonB = latestMeasurements.current.personB;
         
-        // If both have valid measurements, compare face widths
-        if (personA.faceWidth > 0 && personB.faceWidth > 0) {
-            const aInFront = personA.faceWidth > personB.faceWidth;
-            // Debug logging every 60 frames to avoid spam
-            if (frameCount % 60 === 0) {
-                console.log('Depth Analysis:', {
-                    personA: personA.faceWidth,
-                    personB: personB.faceWidth,
-                    aInFront,
-                    comparison: `A: ${personA.faceWidth}px vs B: ${personB.faceWidth}px`
-                });
-            }
-            return aInFront;
+        // If either person doesn't have valid measurements, keep current state
+        if (currentPersonA.faceWidth <= 0 || currentPersonB.faceWidth <= 0) {
+            return depthState.current.currentPersonAInFront;
+        }
+
+        // Calculate percentage difference
+        const difference = Math.abs(currentPersonA.faceWidth - currentPersonB.faceWidth);
+        const average = (currentPersonA.faceWidth + currentPersonB.faceWidth) / 2;
+        const percentageDifference = difference / average;
+        
+        // Determine what the new decision would be based on current measurements
+        const wouldBeAInFront = currentPersonA.faceWidth > currentPersonB.faceWidth;
+        
+        // Only consider switching if the difference is significant (> 8%)
+        const significantDifference = percentageDifference > 0.08;
+        
+        if (!significantDifference) {
+            // Difference too small - keep current state and reset consistency counter
+            depthState.current.consistentFrames = 0;
+            return depthState.current.currentPersonAInFront;
         }
         
-        // Default to Person A in front if no valid comparison
-        return true;
+        // Check if this decision is different from current state
+        const wouldSwitch = wouldBeAInFront !== depthState.current.currentPersonAInFront;
+        
+        if (!wouldSwitch) {
+            // Decision matches current state - reset consistency counter
+            depthState.current.consistentFrames = 0;
+            return depthState.current.currentPersonAInFront;
+        }
+        
+        // Decision would switch - check if it's been consistent
+        if (wouldBeAInFront === depthState.current.lastDecision) {
+            depthState.current.consistentFrames++;
+        } else {
+            // Decision changed - reset counter
+            depthState.current.consistentFrames = 1;
+            depthState.current.lastDecision = wouldBeAInFront;
+        }
+        
+        // Only switch if we've had enough consistent frames AND enough time has passed
+        const enoughConsistentFrames = depthState.current.consistentFrames >= depthState.current.stableFramesRequired;
+        const enoughTimePassed = (frameCount - depthState.current.lastSwitchFrame) > 30; // Minimum 30 frames between switches
+        
+        if (enoughConsistentFrames && enoughTimePassed) {
+            // Make the switch
+            depthState.current.currentPersonAInFront = wouldBeAInFront;
+            depthState.current.lastSwitchFrame = frameCount;
+            depthState.current.consistentFrames = 0;
+            
+            // Debug logging for switches
+            console.log('🔄 Depth Layer Switch:', {
+                newOrder: wouldBeAInFront ? 'A in front' : 'B in front',
+                percentDiff: `${(percentageDifference * 100).toFixed(1)}%`,
+                measurements: {
+                    A: currentPersonA.faceWidth,
+                    B: currentPersonB.faceWidth
+                },
+                framesSinceLastSwitch: frameCount - depthState.current.lastSwitchFrame
+            });
+        }
+        
+        return depthState.current.currentPersonAInFront;
     };
 
     // Function to render the remote video to canvas with transparency
@@ -437,26 +491,26 @@ export default function RoomA() {
                 ctx.drawImage(backgroundOnlyCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
             }
 
-            // Step 2: Determine depth order and composite segmented persons
-            // Use shared ref for immediate access to latest measurements
-            const currentPersonA = latestMeasurements.current.personA;
-            const currentPersonB = latestMeasurements.current.personB;
-            
-            let personAInFront = true; // default
-            
-            if (currentPersonA.faceWidth > 0 && currentPersonB.faceWidth > 0) {
-                personAInFront = currentPersonA.faceWidth > currentPersonB.faceWidth;
-            }
+            // Step 2: Determine depth order using enhanced logic
+            const personAInFront = determineDepthOrder();
             
             // Debug logging every 60 frames
             if (frameCount % 60 === 0) {
-                console.log('Composite Logic:', {
-                    personAInFront,
-                    layerOrder: personAInFront ? 'A in front' : 'B in front',
+                const currentPersonA = latestMeasurements.current.personA;
+                const currentPersonB = latestMeasurements.current.personB;
+                const difference = Math.abs(currentPersonA.faceWidth - currentPersonB.faceWidth);
+                const average = (currentPersonA.faceWidth + currentPersonB.faceWidth) / 2;
+                const percentageDifference = average > 0 ? (difference / average * 100) : 0;
+                
+                console.log('📊 Depth Analysis:', {
+                    currentOrder: personAInFront ? 'A in front' : 'B in front',
                     measurements: {
                         A: currentPersonA.faceWidth,
                         B: currentPersonB.faceWidth
-                    }
+                    },
+                    percentDiff: `${percentageDifference.toFixed(1)}%`,
+                    consistentFrames: depthState.current.consistentFrames,
+                    framesSinceLastSwitch: frameCount - depthState.current.lastSwitchFrame
                 });
             }
 
@@ -623,6 +677,12 @@ export default function RoomA() {
         };
     }, []);
 
+    // Determine depth order based on face sizes
+    const isPersonAInFront = () => {
+        // Use the enhanced depth determination for UI display
+        return determineDepthOrder();
+    };
+
     return (
         <div className="p-6">
             <h1 className="text-2xl font-bold mb-4">Room A (Depth-Aware Host)</h1>
@@ -673,21 +733,33 @@ export default function RoomA() {
                                 <div className="text-blue-600">
                                     <div>🎭 <strong>Person A (Front)</strong></div>
                                     <div>👤 Person B (Behind)</div>
-                                    <div>🏞️ Background</div>
-                                    <div className="text-xs text-gray-400 mt-1">
-                                        A: {faceMeasurements.personA.faceWidth}px &gt; B: {faceMeasurements.personB.faceWidth}px
-                                    </div>
+                                    <div>��️ Background</div>
                                 </div>
                             ) : (
                                 <div className="text-green-600">
                                     <div>👤 <strong>Person B (Front)</strong></div>
                                     <div>🎭 Person A (Behind)</div>
                                     <div>🏞️ Background</div>
-                                    <div className="text-xs text-gray-400 mt-1">
-                                        B: {faceMeasurements.personB.faceWidth}px &gt; A: {faceMeasurements.personA.faceWidth}px
-                                    </div>
                                 </div>
                             )}
+                            {/* Enhanced stability information */}
+                            <div className="text-xs text-gray-400 mt-2 border-t pt-2">
+                                <div>Difference: <span className="font-mono">
+                                    {faceMeasurements.personA.faceWidth > 0 && faceMeasurements.personB.faceWidth > 0 ? 
+                                        `${(Math.abs(faceMeasurements.personA.faceWidth - faceMeasurements.personB.faceWidth) / 
+                                          ((faceMeasurements.personA.faceWidth + faceMeasurements.personB.faceWidth) / 2) * 100).toFixed(1)}%` : 
+                                        'N/A'
+                                    }</span>
+                                </div>
+                                <div>Stable Frames: <span className="font-mono">{depthState.current.consistentFrames}/{depthState.current.stableFramesRequired}</span></div>
+                                <div>Switch Threshold: <span className="font-mono">8.0%</span></div>
+                                <div className="text-xs">
+                                    {depthState.current.consistentFrames >= depthState.current.stableFramesRequired ? 
+                                        '🟢 Ready to switch' : 
+                                        (depthState.current.consistentFrames > 0 ? '🟡 Building stability' : '🔵 Stable')
+                                    }
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -696,10 +768,10 @@ export default function RoomA() {
                 <div className="mt-3 pt-3 border-t border-gray-200">
                     <div className="text-xs text-gray-500 flex items-center justify-between">
                         <span>
-                            Measurements update: Every {frameCount % 15 === 0 ? '✓' : '⏳'} 15 frames
+                            Smart switching: 8% threshold + 15 stable frames + 30 frame cooldown
                         </span>
                         <span className="font-mono">
-                            Frame: {frameCount}
+                            Frame: {frameCount} | Last switch: {frameCount - depthState.current.lastSwitchFrame} frames ago
                         </span>
                     </div>
                 </div>
