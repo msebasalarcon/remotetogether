@@ -257,6 +257,7 @@ export default function RoomA() {
 
     // Determine depth order based on face sizes
     const isPersonAInFront = () => {
+        // Use the current state measurements for real-time accuracy
         const personA = faceMeasurements.personA;
         const personB = faceMeasurements.personB;
         
@@ -427,13 +428,25 @@ export default function RoomA() {
             }
 
             // Step 2: Determine depth order and composite segmented persons
-            const personAInFront = isPersonAInFront();
+            // Direct access to current state to avoid closure issues
+            const currentPersonA = faceMeasurements.personA;
+            const currentPersonB = faceMeasurements.personB;
+            
+            let personAInFront = true; // default
+            
+            if (currentPersonA.faceWidth > 0 && currentPersonB.faceWidth > 0) {
+                personAInFront = currentPersonA.faceWidth > currentPersonB.faceWidth;
+            }
             
             // Debug logging every 60 frames
             if (frameCount % 60 === 0) {
                 console.log('Composite Logic:', {
                     personAInFront,
-                    layerOrder: personAInFront ? 'A in front' : 'B in front'
+                    layerOrder: personAInFront ? 'A in front' : 'B in front',
+                    measurements: {
+                        A: currentPersonA.faceWidth,
+                        B: currentPersonB.faceWidth
+                    }
                 });
             }
 
