@@ -349,13 +349,17 @@ export default function RoomA() {
         ctx.clearRect(0, 0, compositeCanvas.width, compositeCanvas.height);
 
         try {
-            // Step 1: Create clean background by properly masking out Person A
+            // Step 1: Create clean background by properly masking out Person A (with consistent mirroring)
             if (localVideo.readyState >= 2 && localSegmentationCanvas) {
-                // Draw Person A's full video first
+                // Apply mirroring for consistent orientation
+                ctx.save();
+                ctx.scale(-1, 1);
+                ctx.translate(-compositeCanvas.width, 0);
+                
+                // Draw Person A's full video (mirrored)
                 ctx.drawImage(localVideo, 0, 0, compositeCanvas.width, compositeCanvas.height);
                 
                 // Create an inverted mask to remove Person A from background
-                ctx.save();
                 ctx.globalCompositeOperation = 'destination-out';
                 
                 // Get the segmentation canvas context
@@ -387,16 +391,20 @@ export default function RoomA() {
                 
                 tempCtx.putImageData(maskData, 0, 0);
                 
-                // Apply the mask to remove Person A from background
+                // Apply the mask to remove Person A from background (also mirrored)
                 ctx.drawImage(tempCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
-                ctx.restore();
+                ctx.restore(); // Restore from mirroring for background
                 
             } else if (localVideo.readyState >= 2) {
-                // Fallback: just draw the full video if segmentation isn't ready
+                // Fallback: draw mirrored video if segmentation isn't ready
+                ctx.save();
+                ctx.scale(-1, 1);
+                ctx.translate(-compositeCanvas.width, 0);
                 ctx.drawImage(localVideo, 0, 0, compositeCanvas.width, compositeCanvas.height);
+                ctx.restore();
             }
 
-            // Step 2: Composite segmented persons in correct depth order
+            // Step 2: Composite segmented persons in correct depth order (with consistent mirroring)
             const personAInFront = isPersonAInFront();
 
             if (personAInFront) {
@@ -407,16 +415,24 @@ export default function RoomA() {
                     ctx.drawImage(remoteCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
                 }
                 
-                // Draw Person A segmented (in front)
+                // Draw Person A segmented (in front) - apply mirroring to match background
                 if (localSegmentationCanvas) {
+                    ctx.save();
+                    ctx.scale(-1, 1);
+                    ctx.translate(-compositeCanvas.width, 0);
                     ctx.drawImage(localSegmentationCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
+                    ctx.restore();
                 }
             } else {
                 // Person B is closer: Background -> Person A -> Person B
                 
-                // Draw Person A segmented (behind Person B)
+                // Draw Person A segmented (behind Person B) - apply mirroring to match background
                 if (localSegmentationCanvas) {
+                    ctx.save();
+                    ctx.scale(-1, 1);
+                    ctx.translate(-compositeCanvas.width, 0);
                     ctx.drawImage(localSegmentationCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
+                    ctx.restore();
                 }
                 
                 // Draw Person B (in front)
