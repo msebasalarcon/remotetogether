@@ -20,6 +20,7 @@ export default function RoomA() {
     const remoteCanvasRef = useRef(null);
     const compositeCanvasRef = useRef(null);
     const localSegmentationCanvasRef = useRef(null);
+    const backgroundOnlyCanvasRef = useRef(null);
     const peer = useRef(null);
     const segmentor = useRef(null);
     const animationFrameRef = useRef(null);
@@ -328,14 +329,75 @@ export default function RoomA() {
         requestAnimationFrame(renderRemoteVideo);
     };
 
+    // Extract and render background with Person A removed
+    const renderBackgroundOnly = () => {
+        const localVideo = localVideoRef.current;
+        const localSegmentationCanvas = localSegmentationCanvasRef.current;
+        const backgroundCanvas = backgroundOnlyCanvasRef.current;
+
+        if (!backgroundCanvas || !localVideo || localVideo.readyState < 2) {
+            requestAnimationFrame(renderBackgroundOnly);
+            return;
+        }
+
+        const ctx = backgroundCanvas.getContext('2d', {
+            alpha: true,
+            willReadFrequently: false
+        });
+
+        // Clear the canvas
+        ctx.clearRect(0, 0, backgroundCanvas.width, backgroundCanvas.height);
+
+        try {
+            // Mirror the video to match segmentation orientation
+            ctx.save();
+            ctx.scale(-1, 1);
+            ctx.translate(-backgroundCanvas.width, 0);
+            
+            // Draw Person A's full video (mirrored)
+            ctx.drawImage(localVideo, 0, 0, backgroundCanvas.width, backgroundCanvas.height);
+            
+            ctx.restore();
+            
+            if (localSegmentationCanvas) {
+                // Get the segmentation mask to remove Person A
+                const segCtx = localSegmentationCanvas.getContext('2d');
+                const segImageData = segCtx.getImageData(0, 0, localSegmentationCanvas.width, localSegmentationCanvas.height);
+                const backgroundImageData = ctx.getImageData(0, 0, backgroundCanvas.width, backgroundCanvas.height);
+                
+                // Remove Person A from background using inverse mask
+                for (let i = 0; i < segImageData.data.length; i += 4) {
+                    const alpha = segImageData.data[i + 3];
+                    if (alpha > 50) { // Where Person A is present
+                        // Make these pixels more transparent to show background removal
+                        const blendFactor = alpha / 255;
+                        backgroundImageData.data[i] = backgroundImageData.data[i] * (1 - blendFactor * 0.9);
+                        backgroundImageData.data[i + 1] = backgroundImageData.data[i + 1] * (1 - blendFactor * 0.9);
+                        backgroundImageData.data[i + 2] = backgroundImageData.data[i + 2] * (1 - blendFactor * 0.9);
+                        backgroundImageData.data[i + 3] = backgroundImageData.data[i + 3] * (1 - blendFactor * 0.7); // Make more transparent
+                    }
+                }
+                
+                // Put the background-only image back
+                ctx.putImageData(backgroundImageData, 0, 0);
+            }
+
+        } catch (err) {
+            console.error('Error extracting background:', err);
+        }
+
+        // Request next frame
+        requestAnimationFrame(renderBackgroundOnly);
+    };
+
     // Enhanced composite rendering with depth-aware layering
     const renderComposite = () => {
-        const localVideo = localVideoRef.current;
+        const backgroundOnlyCanvas = backgroundOnlyCanvasRef.current;
         const localSegmentationCanvas = localSegmentationCanvasRef.current;
         const remoteCanvas = remoteCanvasRef.current;
         const compositeCanvas = compositeCanvasRef.current;
 
-        if (!compositeCanvas || !localVideo) {
+        if (!compositeCanvas) {
             animationFrameRef.current = requestAnimationFrame(renderComposite);
             return;
         }
@@ -349,62 +411,12 @@ export default function RoomA() {
         ctx.clearRect(0, 0, compositeCanvas.width, compositeCanvas.height);
 
         try {
-            // Step 1: Create clean background by properly masking out Person A (with consistent mirroring)
-            if (localVideo.readyState >= 2 && localSegmentationCanvas) {
-                // Apply mirroring for consistent orientation
-                ctx.save();
-                ctx.scale(-1, 1);
-                ctx.translate(-compositeCanvas.width, 0);
-                
-                // Draw Person A's full video (mirrored)
-                ctx.drawImage(localVideo, 0, 0, compositeCanvas.width, compositeCanvas.height);
-                
-                // Create an inverted mask to remove Person A from background
-                ctx.globalCompositeOperation = 'destination-out';
-                
-                // Get the segmentation canvas context
-                const segCtx = localSegmentationCanvas.getContext('2d');
-                const tempCanvas = document.createElement('canvas');
-                tempCanvas.width = localSegmentationCanvas.width;
-                tempCanvas.height = localSegmentationCanvas.height;
-                const tempCtx = tempCanvas.getContext('2d');
-                
-                // Create a mask from the segmentation alpha channel
-                const segImageData = segCtx.getImageData(0, 0, localSegmentationCanvas.width, localSegmentationCanvas.height);
-                const maskData = tempCtx.createImageData(segImageData.width, segImageData.height);
-                
-                // Convert segmentation alpha to a white mask (where Person A is)
-                for (let i = 0; i < segImageData.data.length; i += 4) {
-                    const alpha = segImageData.data[i + 3];
-                    if (alpha > 100) { // Where Person A is detected
-                        maskData.data[i] = 255;     // R
-                        maskData.data[i + 1] = 255; // G  
-                        maskData.data[i + 2] = 255; // B
-                        maskData.data[i + 3] = 255; // A
-                    } else {
-                        maskData.data[i] = 0;       // R
-                        maskData.data[i + 1] = 0;   // G
-                        maskData.data[i + 2] = 0;   // B
-                        maskData.data[i + 3] = 0;   // A
-                    }
-                }
-                
-                tempCtx.putImageData(maskData, 0, 0);
-                
-                // Apply the mask to remove Person A from background (also mirrored)
-                ctx.drawImage(tempCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
-                ctx.restore(); // Restore from mirroring for background
-                
-            } else if (localVideo.readyState >= 2) {
-                // Fallback: draw mirrored video if segmentation isn't ready
-                ctx.save();
-                ctx.scale(-1, 1);
-                ctx.translate(-compositeCanvas.width, 0);
-                ctx.drawImage(localVideo, 0, 0, compositeCanvas.width, compositeCanvas.height);
-                ctx.restore();
+            // Step 1: Draw the background (with Person A already removed)
+            if (backgroundOnlyCanvas) {
+                ctx.drawImage(backgroundOnlyCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
             }
 
-            // Step 2: Composite segmented persons in correct depth order (with consistent mirroring)
+            // Step 2: Determine depth order and composite segmented persons
             const personAInFront = isPersonAInFront();
 
             if (personAInFront) {
@@ -415,24 +427,16 @@ export default function RoomA() {
                     ctx.drawImage(remoteCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
                 }
                 
-                // Draw Person A segmented (in front) - apply mirroring to match background
+                // Draw Person A segmented (in front)
                 if (localSegmentationCanvas) {
-                    ctx.save();
-                    ctx.scale(-1, 1);
-                    ctx.translate(-compositeCanvas.width, 0);
                     ctx.drawImage(localSegmentationCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
-                    ctx.restore();
                 }
             } else {
                 // Person B is closer: Background -> Person A -> Person B
                 
-                // Draw Person A segmented (behind Person B) - apply mirroring to match background
+                // Draw Person A segmented (behind Person B)
                 if (localSegmentationCanvas) {
-                    ctx.save();
-                    ctx.scale(-1, 1);
-                    ctx.translate(-compositeCanvas.width, 0);
                     ctx.drawImage(localSegmentationCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
-                    ctx.restore();
                 }
                 
                 // Draw Person B (in front)
@@ -466,6 +470,7 @@ export default function RoomA() {
             const remoteCanvas = remoteCanvasRef.current;
             const compositeCanvas = compositeCanvasRef.current;
             const localSegmentationCanvas = localSegmentationCanvasRef.current;
+            const backgroundOnlyCanvas = backgroundOnlyCanvasRef.current;
             
             remoteCanvas.width = 640;
             remoteCanvas.height = 480;
@@ -473,6 +478,8 @@ export default function RoomA() {
             compositeCanvas.height = 480;
             localSegmentationCanvas.width = 640;
             localSegmentationCanvas.height = 480;
+            backgroundOnlyCanvas.width = 640;
+            backgroundOnlyCanvas.height = 480;
 
             // Initialize Person A segmentation
             await initializeSegmentation();
@@ -481,6 +488,7 @@ export default function RoomA() {
             localVideoRef.current.onloadedmetadata = () => {
                 setTimeout(() => {
                     startPersonASegmentation();
+                    renderBackgroundOnly(); // Start background extraction loop
                 }, 1000); // Give video time to stabilize
             };
 
@@ -524,11 +532,12 @@ export default function RoomA() {
                         console.log('Remote video playing');
                         setIsConnected(true);
                         
-                        // Start both render loops
+                        // Start all render loops
                         if (animationFrameRef.current) {
                             cancelAnimationFrame(animationFrameRef.current);
                         }
                         renderRemoteVideo();
+                        renderBackgroundOnly();
                         renderComposite();
                     }).catch(err => {
                         console.error('Error playing remote video:', err);
@@ -655,7 +664,7 @@ export default function RoomA() {
                 </div>
             </div>
 
-            <div className="grid grid-cols-4 gap-4">
+            <div className="grid grid-cols-5 gap-4">
                 <div>
                     <h2 className="text-lg font-semibold mb-2">Your Camera</h2>
                     <video
@@ -678,6 +687,13 @@ export default function RoomA() {
                             backgroundSize: '20px 20px',
                             backgroundPosition: '0 0, 0 10px, 10px -10px, -10px 0px'
                         }}
+                    />
+                </div>
+                <div>
+                    <h2 className="text-lg font-semibold mb-2">Background Only</h2>
+                    <canvas
+                        ref={backgroundOnlyCanvasRef}
+                        className="w-full rounded bg-black"
                     />
                 </div>
                 <div>

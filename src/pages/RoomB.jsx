@@ -551,6 +551,7 @@ export default function RoomB() {
                         <video
                             ref={localVideoRef}
                             className="w-full rounded-lg shadow-lg"
+                            style={{ transform: 'scaleX(-1)' }}
                             playsInline
                             muted
                             autoPlay
