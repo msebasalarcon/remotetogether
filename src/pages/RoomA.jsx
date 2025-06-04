@@ -262,7 +262,17 @@ export default function RoomA() {
         
         // If both have valid measurements, compare face widths
         if (personA.faceWidth > 0 && personB.faceWidth > 0) {
-            return personA.faceWidth > personB.faceWidth;
+            const aInFront = personA.faceWidth > personB.faceWidth;
+            // Debug logging every 60 frames to avoid spam
+            if (frameCount % 60 === 0) {
+                console.log('Depth Analysis:', {
+                    personA: personA.faceWidth,
+                    personB: personB.faceWidth,
+                    aInFront,
+                    comparison: `A: ${personA.faceWidth}px vs B: ${personB.faceWidth}px`
+                });
+            }
+            return aInFront;
         }
         
         // Default to Person A in front if no valid comparison
@@ -418,6 +428,14 @@ export default function RoomA() {
 
             // Step 2: Determine depth order and composite segmented persons
             const personAInFront = isPersonAInFront();
+            
+            // Debug logging every 60 frames
+            if (frameCount % 60 === 0) {
+                console.log('Composite Logic:', {
+                    personAInFront,
+                    layerOrder: personAInFront ? 'A in front' : 'B in front'
+                });
+            }
 
             if (personAInFront) {
                 // Person A is closer: Background -> Person B -> Person A
