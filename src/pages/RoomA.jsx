@@ -40,6 +40,12 @@ export default function RoomA() {
         personB: { faceWidth: 0, depthEstimate: 1 }
     });
 
+    // Shared ref for immediate access by composite function
+    const latestMeasurements = useRef({
+        personA: { faceWidth: 0, depthEstimate: 1 },
+        personB: { faceWidth: 0, depthEstimate: 1 }
+    });
+
     // Temporal smoothing for Person A
     const maskHistoryA = useRef([]);
     const maxHistoryFrames = 2;
@@ -97,11 +103,13 @@ export default function RoomA() {
             depthEstimate
         };
 
-        // Update state to trigger re-render
+        // Update both state (for UI) and ref (for immediate composite access)
         setFaceMeasurements(prev => ({
             ...prev,
             personA: newMeasurements
         }));
+        
+        latestMeasurements.current.personA = newMeasurements;
 
         return newMeasurements;
     };
@@ -246,11 +254,13 @@ export default function RoomA() {
             depthEstimate
         };
 
-        // Update state to trigger re-render
+        // Update both state (for UI) and ref (for immediate composite access)
         setFaceMeasurements(prev => ({
             ...prev,
             personB: newMeasurements
         }));
+        
+        latestMeasurements.current.personB = newMeasurements;
 
         return newMeasurements;
     };
@@ -428,9 +438,9 @@ export default function RoomA() {
             }
 
             // Step 2: Determine depth order and composite segmented persons
-            // Direct access to current state to avoid closure issues
-            const currentPersonA = faceMeasurements.personA;
-            const currentPersonB = faceMeasurements.personB;
+            // Use shared ref for immediate access to latest measurements
+            const currentPersonA = latestMeasurements.current.personA;
+            const currentPersonB = latestMeasurements.current.personB;
             
             let personAInFront = true; // default
             
