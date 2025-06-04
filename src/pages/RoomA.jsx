@@ -153,7 +153,7 @@ export default function RoomA() {
             // Clear canvas
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // Draw segmentation mask
+            // Draw segmentation mask (no mirroring needed - MediaPipe handles orientation)
             ctx.save();
             ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
             
@@ -349,35 +349,59 @@ export default function RoomA() {
         ctx.clearRect(0, 0, compositeCanvas.width, compositeCanvas.height);
 
         try {
-            // Always draw Person A's background first (lowest layer)
-            if (localVideo.readyState >= 2) {
+            // Step 1: Create background by removing Person A from their video
+            if (localVideo.readyState >= 2 && localSegmentationCanvas) {
+                // Draw Person A's full video first
+                ctx.drawImage(localVideo, 0, 0, compositeCanvas.width, compositeCanvas.height);
+                
+                // Get the segmentation mask to remove Person A
+                const segCtx = localSegmentationCanvas.getContext('2d');
+                const segImageData = segCtx.getImageData(0, 0, localSegmentationCanvas.width, localSegmentationCanvas.height);
+                const compositeImageData = ctx.getImageData(0, 0, compositeCanvas.width, compositeCanvas.height);
+                
+                // Remove Person A from background using inverse mask
+                for (let i = 0; i < segImageData.data.length; i += 4) {
+                    const alpha = segImageData.data[i + 3];
+                    if (alpha > 50) { // Where Person A is present
+                        // Make these pixels transparent or blend with a neutral background
+                        const blendFactor = alpha / 255;
+                        compositeImageData.data[i] = compositeImageData.data[i] * (1 - blendFactor * 0.8);
+                        compositeImageData.data[i + 1] = compositeImageData.data[i + 1] * (1 - blendFactor * 0.8);
+                        compositeImageData.data[i + 2] = compositeImageData.data[i + 2] * (1 - blendFactor * 0.8);
+                    }
+                }
+                
+                // Put the background-only image back
+                ctx.putImageData(compositeImageData, 0, 0);
+            } else if (localVideo.readyState >= 2) {
+                // Fallback: just draw the full video if segmentation isn't ready
                 ctx.drawImage(localVideo, 0, 0, compositeCanvas.width, compositeCanvas.height);
             }
 
-            // Determine depth order and composite accordingly
+            // Step 2: Determine depth order and composite segmented persons
             const personAInFront = isPersonAInFront();
 
             if (personAInFront) {
-                // Person A is closer: Background -> Person B -> Person A foreground
+                // Person A is closer: Background -> Person B -> Person A
                 
-                // Draw Person B (middle layer)
+                // Draw Person B (behind Person A)
                 if (remoteCanvas) {
                     ctx.drawImage(remoteCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
                 }
                 
-                // Draw Person A segmented (top layer)
+                // Draw Person A segmented (in front)
                 if (localSegmentationCanvas) {
                     ctx.drawImage(localSegmentationCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
                 }
             } else {
-                // Person B is closer: Background -> Person A foreground -> Person B
+                // Person B is closer: Background -> Person A -> Person B
                 
-                // Draw Person A segmented (middle layer)
+                // Draw Person A segmented (behind Person B)
                 if (localSegmentationCanvas) {
                     ctx.drawImage(localSegmentationCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
                 }
                 
-                // Draw Person B (top layer)
+                // Draw Person B (in front)
                 if (remoteCanvas) {
                     ctx.drawImage(remoteCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
                 }
@@ -606,6 +630,7 @@ export default function RoomA() {
                         playsInline
                         muted
                         className="w-full bg-black rounded"
+                        style={{ transform: 'scaleX(-1)' }}
                     />
                 </div>
                 <div>
